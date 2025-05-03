@@ -19,6 +19,7 @@ extern "C" {
 asn_struct_compare_f SEQUENCE_OF_compare;
 der_type_encoder_f SEQUENCE_OF_encode_der;
 xer_type_encoder_f SEQUENCE_OF_encode_xer;
+jer_type_encoder_f SEQUENCE_OF_encode_jer;
 per_type_encoder_f SEQUENCE_OF_encode_uper;
 extern asn_TYPE_operation_t asn_OP_SEQUENCE_OF;
 

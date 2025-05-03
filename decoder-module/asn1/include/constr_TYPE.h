@@ -38,6 +38,8 @@ typedef struct asn_struct_ctx_s {
 #include "der_encoder.h"	/* Distinguished Encoding Rules encoder */
 #include "xer_decoder.h"	/* Decoder of XER (XML, text) */
 #include "xer_encoder.h"	/* Encoder into XER (XML, text) */
+#include "jer_decoder.h"  /* Decoder of JER (JSON, text) */
+#include "jer_encoder.h"  /* Encoder into JER (JSON, text) */
 #include "per_decoder.h"	/* Packet Encoding Rules decoder */
 #include "per_encoder.h"	/* Packet Encoding Rules encoder */
 #include "constraints.h"	/* Subtype constraints support */
@@ -114,6 +116,16 @@ typedef int (asn_struct_compare_f)(
 		const void *struct_B);
 
 /*
+ * Copies struct B into struct A.
+ * Allocates memory for struct A, if necessary.
+ */
+typedef int (asn_struct_copy_f)(
+    const struct asn_TYPE_descriptor_s *type_descriptor,
+    void **struct_A,
+    const void *struct_B
+    );
+
+/*
  * Return the outmost tag of the type.
  * If the type is untagged CHOICE, the dynamic operation is performed.
  * NOTE: This function pointer type is only useful internally.
@@ -149,6 +161,8 @@ typedef struct asn_TYPE_operation_s {
     der_type_encoder_f *der_encoder;      /* Canonical DER encoder */
     xer_type_decoder_f *xer_decoder;      /* Generic XER decoder */
     xer_type_encoder_f *xer_encoder;      /* [Canonical] XER encoder */
+    jer_type_decoder_f *jer_decoder;      /* Generic JER encoder */
+    jer_type_encoder_f *jer_encoder;      /* Generic JER encoder */
     oer_type_decoder_f *oer_decoder;      /* Generic OER decoder */
     oer_type_encoder_f *oer_encoder;      /* Canonical OER encoder */
     per_type_decoder_f *uper_decoder;     /* Unaligned PER decoder */

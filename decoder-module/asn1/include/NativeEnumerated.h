@@ -22,6 +22,8 @@ extern asn_TYPE_descriptor_t asn_DEF_NativeEnumerated;
 extern asn_TYPE_operation_t asn_OP_NativeEnumerated;
 
 xer_type_encoder_f NativeEnumerated_encode_xer;
+jer_type_decoder_f NativeEnumerated_decode_jer;
+jer_type_encoder_f NativeEnumerated_encode_jer;
 oer_type_decoder_f NativeEnumerated_decode_oer;
 oer_type_encoder_f NativeEnumerated_encode_oer;
 per_type_decoder_f NativeEnumerated_decode_uper;

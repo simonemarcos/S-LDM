@@ -16,10 +16,8 @@
 #include <atomic>
 
 #include "etsiDecoderFrontend.h"
-#include "areaFilter.h"
 #include "LDMmap.h"
-#include "utils.h"
-#include "triggerManager.h"
+#include "MisbehaviourDetector.h"
 
 class AMQPClient : public proton::messaging_handler {
 	private:
@@ -33,11 +31,7 @@ class AMQPClient : public proton::messaging_handler {
 		bool m_printMsg; // If 'true' each received message will be printed (default: 'false' - enable only for debugging purposes)
 
 		etsiDecoder::decoderFrontend m_decodeFrontend;
-		areaFilter m_areaFilter;
-		struct options *m_opts_ptr;
-		ldmmap::LDMMap *m_db_ptr;
-		indicatorTriggerManager *m_indicatorTrgMan_ptr;
-		bool m_indicatorTrgMan_enabled;
+		MisbehaviourDetector *m_MBDetector_ptr;
 
 		std::string m_logfile_name;
 		FILE *m_logfile_file;
@@ -56,10 +50,8 @@ class AMQPClient : public proton::messaging_handler {
 		std::atomic<proton::container *> m_cont;
 	public:
 		AMQPClient(const std::string &u,const std::string &a,const double &latmin,const double &latmax,const double &lonmin, const double &lonmax, struct options *opts_ptr, ldmmap::LDMMap *db_ptr, std::string logfile_name) :
-		conn_url_(u), addr_(a), max_latitude(latmax), max_longitude(lonmax), min_latitude(latmin), min_longitude(lonmin), m_opts_ptr(opts_ptr), m_db_ptr(db_ptr), m_logfile_name(logfile_name), m_quadKey_filter("") {
+		conn_url_(u), addr_(a), max_latitude(latmax), max_longitude(lonmax), min_latitude(latmin), min_longitude(lonmin), m_logfile_name(logfile_name), m_quadKey_filter("") {
 			m_printMsg=false;
-			m_areaFilter.setOptions(m_opts_ptr);
-			m_indicatorTrgMan_enabled=false;
 			m_logfile_file=nullptr;
 			m_reconnect=false;
 			m_allow_sasl=false;
@@ -70,10 +62,8 @@ class AMQPClient : public proton::messaging_handler {
 		}
 
 		AMQPClient(const std::string &u,const std::string &a,const double &latmin,const double &latmax,const double &lonmin, const double &lonmax, struct options *opts_ptr, ldmmap::LDMMap *db_ptr) :
-		conn_url_(u), addr_(a), max_latitude(latmax), max_longitude(lonmax), min_latitude(latmin), min_longitude(lonmin), m_opts_ptr(opts_ptr), m_db_ptr(db_ptr), m_quadKey_filter("") {
+		conn_url_(u), addr_(a), max_latitude(latmax), max_longitude(lonmax), min_latitude(latmin), min_longitude(lonmin), m_quadKey_filter("") {
 			m_printMsg=false;
-			m_areaFilter.setOptions(m_opts_ptr);
-			m_indicatorTrgMan_enabled=false;
 			m_logfile_name = "";
 			m_logfile_file=nullptr;
 			m_reconnect=false;
@@ -84,9 +74,8 @@ class AMQPClient : public proton::messaging_handler {
 			m_idle_timeout_ms=-1;
 		}
 
-		void setIndicatorTriggerManager(indicatorTriggerManager *indicatorTrgMan_ptr) {
-			m_indicatorTrgMan_ptr=indicatorTrgMan_ptr;
-			m_indicatorTrgMan_enabled=true;
+		void setMisbehaviourDetector(MisbehaviourDetector *MBDetector_ptr) {
+			m_MBDetector_ptr=MBDetector_ptr;
 		}
 
 		void setUsername(std::string username) {
@@ -122,8 +111,6 @@ class AMQPClient : public proton::messaging_handler {
 		void setFilter(std::string &filter) {
 			m_quadKey_filter=filter;
 		}
-		
-		inline ldmmap::OptionalDataItem<uint8_t> manage_LowfreqContainer(CAM_t *decoded_cam,uint32_t stationID);
 
 		void on_container_start(proton::container &c) override;
 		void on_connection_open(proton::connection &conn) override;

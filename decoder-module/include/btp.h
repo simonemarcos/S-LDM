@@ -11,6 +11,8 @@
 
 #define CA_PORT 2001
 #define DEN_PORT 2002
+#define CP_PORT 2009
+#define VA_PORT 2018
 
 namespace etsiDecoder {
     class btp {

@@ -43,6 +43,8 @@ asn_struct_compare_f INTEGER_compare;
 der_type_encoder_f INTEGER_encode_der;
 xer_type_decoder_f INTEGER_decode_xer;
 xer_type_encoder_f INTEGER_encode_xer;
+jer_type_decoder_f INTEGER_decode_jer;
+jer_type_encoder_f INTEGER_encode_jer;
 oer_type_decoder_f INTEGER_decode_oer;
 oer_type_encoder_f INTEGER_encode_oer;
 per_type_decoder_f INTEGER_decode_uper;

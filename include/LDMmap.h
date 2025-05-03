@@ -6,6 +6,7 @@
 #include <shared_mutex>
 #include "PHpoints.h"
 #include "vehicleDataDef.h"
+#include <set>
 
 namespace ldmmap {
 	class LDMMap {
@@ -78,6 +79,8 @@ namespace ldmmap {
 	    	std::pair<double,double> getCentralLatLon() {return std::make_pair(m_central_lat,m_central_lon);}
 
 	    	int getCardinality() {return m_card;};
+
+			LDMMap_error_t getAllIDs(std::set<uint64_t> &selectedIDs);
 
 		private:
 			// Main database structure

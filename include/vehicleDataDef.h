@@ -10,6 +10,9 @@
 // Facility macro to convert from DEG to RAD
 #define DEG_2_RAD(val) ((val)*M_PI/180.0)
 
+// Unavailable value for the heading
+#define LDM_HEADING_UNAVAILABLE 3601.0
+
 namespace ldmmap {
 	// Class to store optional data
 	// If the data is not available, m_available is 'false' and no actual data is stored (getData() does not return any meaningful data)
@@ -79,6 +82,27 @@ namespace ldmmap {
 
 		// Low frequency container data
 		OptionalDataItem<uint8_t> exteriorLights; // Bit string with exterior lights status
+		
+		// CPM patch
+		uint64_t lastCPMincluded;
+		uint64_t perceivedBy;
+		long xDistance;
+		long yDistance;
+		long xSpeed;
+		long ySpeed;
+		//long xAcc;
+		//long yAcc;
+		//long longitudinalAcceleration;
+		long confidence;
+		long angle;
+		bool detected;
+
+		// VAM patch
+		uint8_t macaddr[6];
+		double rssi_dBm;
+		std::string ipaddr;
+		std::string publicipaddr;
+
 	} vehicleData_t;
 }
 

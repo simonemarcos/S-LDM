@@ -33,6 +33,7 @@
 #define LONGOPT_g "disable-age-check"
 #define LONGOPT_O "enable-on-demand-requests"
 #define LONGOPT_o "set-on-demand-json-port"
+#define LONGOPT_m "disable-mb-detector"
 
 // AMQP broker (main)
 #define LONGOPT_u "amqp-main-username"
@@ -117,7 +118,8 @@ static const struct option long_opts[]={
 	{LONGOPT_g,				no_argument,		NULL, 'g'},
 	{LONGOPT_O,				no_argument,		NULL, 'O'},
 	{LONGOPT_o,				required_argument,	NULL, 'o'},
-
+	{LONGOPT_m, 			no_argument,		NULL, 'm'},
+	
 	{LONGOPT_vehviz_update_interval_sec,			required_argument,	NULL, LONGOPT_vehviz_update_interval_sec_val},
 	{LONGOPT_indicator_trgman_disable,				no_argument,		NULL, LONGOPT_indicator_trgman_disable_val},
 	{LONGOPT_disable_quadkey_filter,				no_argument,		NULL, LONGOPT_disable_quadkey_filter_val},
@@ -267,6 +269,11 @@ static const struct option long_opts[]={
 	LONGOPT_STR_CONSTRUCTOR(LONGOPT_o) \
 	"  -o <port>: set the port for the on-demand JSON-over-TCP interface server. Default: ("STRINGIFY(DEFAULT_OD_JSON_OVER_TCP_INTERFACE_PORT)")\n"
 
+#define OPT_m_description \
+	LONGOPT_STR_CONSTRUCTOR(LONGOPT_m) \
+	"  -m: disable then receiving messages. When this option is active, every message.\n" \
+	"\t  received is always saved to the database, without any type of control.\n" \
+
 #define OPT_vehviz_update_interval_sec_description \
 	"  --"LONGOPT_vehviz_update_interval_sec" <interval in seconds>: advanced option: this option can be used to\n" \
 	"\t  modify the update rate of the web-based GUI. \n" \
@@ -370,6 +377,7 @@ static void print_long_info(char *argv0) {
 		OPT_I_description
 		OPT_O_description
 		OPT_o_description
+		OPT_m_description
 		OPT_vehviz_update_interval_sec_description
 		OPT_indicator_trgman_disable_description
 		OPT_disable_quadkey_filter_description
@@ -682,6 +690,10 @@ unsigned int parse_options(int argc, char **argv, struct options *options) {
 				}
 
 				options->ageCheck_enabled=false;
+				break;
+
+			case 'm':
+				options->MBDetector_enabled=false;
 				break;
 
 			case LONGOPT_vehviz_update_interval_sec_val:

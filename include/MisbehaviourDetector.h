@@ -14,7 +14,6 @@
 #include <proton/message.hpp>
 
 extern "C" {
-	#include "CAM.h"
 	#include "options.h"
 }
 
@@ -24,6 +23,7 @@ class MisbehaviourDetector {
 		MisbehaviourDetector(ldmmap::LDMMap *db_ptr, options_t *opts_ptr, std::string logfile_name) : m_db_ptr(db_ptr), m_opts_ptr(opts_ptr), m_logfile_name(logfile_name) {
 			m_areaFilter.setOptions(m_opts_ptr);
 			m_logfile_file=nullptr;
+			m_detection_enabled=true;
 			if (m_logfile_name!="") {
 				if (m_logfile_name=="stdout") {
 					m_logfile_file=stdout;
@@ -37,6 +37,7 @@ class MisbehaviourDetector {
 			m_areaFilter.setOptions(m_opts_ptr);
 			m_logfile_name="";
 			m_logfile_file=nullptr;
+			m_detection_enabled=true;
 		}
 		
 		void setDBpointer(ldmmap::LDMMap *db_ptr) {m_db_ptr = db_ptr;}
@@ -56,7 +57,8 @@ class MisbehaviourDetector {
 		ldmmap::LDMMap *m_db_ptr;
 		options_t *m_opts_ptr;
 		std::map<uint64_t, std::map<uint64_t,uint64_t>> m_recvCPMmap;  //! Structure mapping, for each CV that we have received a CPM from, the CPM's PO ids with the ego LDM's PO ids
-		
+		std::map<uint64_t, ldmmap::vehicleData_t> m_lastMessageCache;
+
         bool m_detection_enabled;
 		
 		std::string m_logfile_name;
@@ -66,10 +68,13 @@ class MisbehaviourDetector {
 		bool m_indicatorTrgMan_enabled;
 		
 		inline ldmmap::OptionalDataItem<uint8_t> manage_LowfreqContainer(CAM_t *decoded_cam,uint32_t stationID);
-		void decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id);
-		void decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id);
-		void decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id);
+		bool decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,ldmmap::vehicleData_t &vehdata);
+		bool decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id, std::vector<ldmmap::vehicleData_t> &PO_vec);
+		bool decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,ldmmap::vehicleData_t &vehdata);
 
+		uint64_t checkCAMFreq(ldmmap::vehicleData_t vehdata);
+		void updateLastMessage(ldmmap::vehicleData_t vehdata);
+		
 };
 
 #endif // MB_DETECTOR_H

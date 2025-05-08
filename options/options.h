@@ -142,7 +142,7 @@ static inline bool fill_AMQPClient_options_array_##name(char * optarg, int num_c
 // Valid options
 // Any new option should be handled in the switch-case inside parse_options() and the corresponding char should be added to VALID_OPTS
 // If an option accepts an additional argument, it is followed by ':'
-#define VALID_OPTS "hvA:E:F:cU:Q:r:s:Z:z:w:L:u:p:RSIC:gOo:"
+#define VALID_OPTS "hvA:E:F:cU:Q:r:s:Z:z:w:L:u:p:RSIC:gOo:m"
 
 #define INIT_CODE 0xAE
 

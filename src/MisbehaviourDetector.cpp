@@ -17,8 +17,10 @@ extern "C" {
 
 bool MisbehaviourDetector::processMessage(etsiDecoder::etsiDecodedData_t decoded_data, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id) {
 	bool retval = false;
-	int MB_CODE=0;
-	uint64_t placeholderVehicle=1;
+	uint64_t MB_CODE=0;
+	ldmmap::LDMMap::LDMMap_error_t db_retval;
+	ldmmap::vehicleData_t vehdata;
+	vehicleDataVector_t(PO_vec);
 
 	if(!m_db_ptr || !m_opts_ptr) {
 		return retval;
@@ -26,8 +28,37 @@ bool MisbehaviourDetector::processMessage(etsiDecoder::etsiDecodedData_t decoded
 
 	if(m_detection_enabled==true) {
 		if (decoded_data.type==etsiDecoder::ETSI_DECODED_CAM || decoded_data.type==etsiDecoder::ETSI_DECODED_CAM_NOGN) {
-			decodeCAM(decoded_data,msg,on_msg_timestamp_us,main_bf,m_client_id);
+			if (decodeCAM(decoded_data,msg,on_msg_timestamp_us,main_bf,m_client_id,vehdata)==false) {
+				return retval;
+			}
+			//checks to be made here with decoded data
+			// MB_CODE=detectionFunction(...);
+			MB_CODE=0;
+			MB_CODE|=checkCAMFreq(vehdata);
 
+			// Avoid reporting the same vehicle multiple times
+			// in future the check should be on the cause of report
+			// if different another report can and should be issued
+			if (MB_CODE) {
+				// report to be created here
+				m_already_reported_mutex.lock();
+				if(std::find(m_already_reported.begin(), m_already_reported.end(), vehdata.stationID) == m_already_reported.end()) {
+					//only mark as reported without sending the actual report for now
+					m_already_reported.push_back(vehdata.stationID);
+				} else {
+					
+				}
+				m_already_reported_mutex.unlock();
+			} else {
+				//no Misbehaviour detected, insert into ldm
+				db_retval=m_db_ptr->insert(vehdata);
+				updateLastMessage(vehdata);
+			}
+
+		} else if (decoded_data.type==etsiDecoder::ETSI_DECODED_CPM || decoded_data.type==etsiDecoder::ETSI_DECODED_CPM_NOGN) {
+			if (decodeCPM(decoded_data,msg,on_msg_timestamp_us,main_bf,m_client_id,PO_vec)==false) {
+				return retval;
+			}
 			//checks to be made here with decoded data
 			// MB_CODE=detectionFunction(...);
 			MB_CODE=0;
@@ -36,28 +67,49 @@ bool MisbehaviourDetector::processMessage(etsiDecoder::etsiDecodedData_t decoded
 			// in future the check should be on the cause of report
 			// if different another report can and should be issued
 			if (MB_CODE) {
-				
 				// report to be created here
-
 				m_already_reported_mutex.lock();
-				if(std::find(m_already_reported.begin(), m_already_reported.end(), placeholderVehicle) == m_already_reported.end()) {
-					
+				//using first element (at least one present) to retrieve CPM sender StationID
+				if(std::find(m_already_reported.begin(), m_already_reported.end(), PO_vec.front().perceivedBy) == m_already_reported.end()) {
 					//only mark as reported without sending the actual report for now
-					m_already_reported.push_back(placeholderVehicle);
+					m_already_reported.push_back(PO_vec.front().perceivedBy);
 				} else {
-					
 				}
 				m_already_reported_mutex.unlock();
 			} else {
 				//no Misbehaviour detected, insert into ldm
-				// insert here
+				for (ldmmap::vehicleData_t PO_data:PO_vec) {
+					db_retval=m_db_ptr->insert(PO_data);
+	
+					if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
+						std::cerr << "Warning! Insert on the database for Perceived Object " << (int) PO_data.stationID << "failed!" << std::endl;
+					}
+				}
 			}
-
-
-		} else if (decoded_data.type==etsiDecoder::ETSI_DECODED_CPM || decoded_data.type==etsiDecoder::ETSI_DECODED_CPM_NOGN) {
-			decodeCPM(decoded_data,msg,on_msg_timestamp_us,main_bf,m_client_id);
-
 		} else if (decoded_data.type==etsiDecoder::ETSI_DECODED_VAM || decoded_data.type==etsiDecoder::ETSI_DECODED_VAM_NOGN) {
+			if (decodeVAM(decoded_data,msg,on_msg_timestamp_us,main_bf,m_client_id,vehdata)==false) {
+				return retval;
+			}
+			//checks to be made here with decoded data
+			// MB_CODE=detectionFunction(...);
+			MB_CODE=0;
+
+			// Avoid reporting the same vehicle multiple times
+			// in future the check should be on the cause of report
+			// if different another report can and should be issued
+			if (MB_CODE) {
+				// report to be created here
+				m_already_reported_mutex.lock();
+				if(std::find(m_already_reported.begin(), m_already_reported.end(), vehdata.stationID) == m_already_reported.end()) {
+					//only mark as reported without sending the actual report for now
+					m_already_reported.push_back(vehdata.stationID);
+				} else {
+				}
+				m_already_reported_mutex.unlock();
+			} else {
+				//no Misbehaviour detected, insert into ldm
+				db_retval=m_db_ptr->insert(vehdata);
+			}
 
 		} else {
 			std::cerr << "Warning! Message type not supported!" << std::endl;
@@ -65,16 +117,40 @@ bool MisbehaviourDetector::processMessage(etsiDecoder::etsiDecodedData_t decoded
 		}
 	} else {
         //if detection is disabled just decode and insert
-		//insert will be after decoding, it's in the decode function for now
 		if (decoded_data.type==etsiDecoder::ETSI_DECODED_CAM || decoded_data.type==etsiDecoder::ETSI_DECODED_CAM_NOGN) {			
-			decodeCAM(decoded_data,msg,on_msg_timestamp_us,main_bf,m_client_id);
+			if (decodeCAM(decoded_data,msg,on_msg_timestamp_us,main_bf,m_client_id,vehdata)==false) {
+				return retval;
+			}
+			std::cout << "[DEBUG] Updating vehicle with stationID: " << vehdata.stationID << std::endl;
+			db_retval=m_db_ptr->insert(vehdata);
+			
+			if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
+				std::cerr << "Warning! Insert on the database for vehicle " << (int) vehdata.stationID << "failed!" << std::endl;
+			}
 
 		} else if (decoded_data.type==etsiDecoder::ETSI_DECODED_CPM || decoded_data.type==etsiDecoder::ETSI_DECODED_CPM_NOGN) {
-			decodeCPM(decoded_data,msg,on_msg_timestamp_us,main_bf,m_client_id);
+			if (decodeCPM(decoded_data,msg,on_msg_timestamp_us,main_bf,m_client_id,PO_vec)==false) {
+				return retval;
+			}
+
+			for (ldmmap::vehicleData_t PO_data:PO_vec) {
+				db_retval=m_db_ptr->insert(PO_data);
+
+				if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
+					std::cerr << "Warning! Insert on the database for Perceived Object " << (int) PO_data.stationID << "failed!" << std::endl;
+				}
+			}
 
 		} else if (decoded_data.type==etsiDecoder::ETSI_DECODED_VAM || decoded_data.type==etsiDecoder::ETSI_DECODED_VAM_NOGN) {
-			decodeVAM(decoded_data,msg,on_msg_timestamp_us,main_bf,m_client_id);
+			if (decodeVAM(decoded_data,msg,on_msg_timestamp_us,main_bf,m_client_id,vehdata)==false) {
+				return retval;
+			}
 
+			db_retval=m_db_ptr->insert(vehdata);
+
+			if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
+				std::cerr << "Warning! Insert on the database for VRU " << (int) vehdata.stationID << "failed!" << std::endl;
+			}
 		} else {
 			std::cerr << "Warning! Message type not supported!" << std::endl;
 			return retval;
@@ -119,7 +195,7 @@ MisbehaviourDetector::manage_LowfreqContainer(CAM_t *decoded_cam,uint32_t statio
           }
 }
 
-void MisbehaviourDetector::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id) {
+bool MisbehaviourDetector::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,ldmmap::vehicleData_t &vehdata) {
 
 	uint64_t bf = 0.0,af = 0.0;
 	uint64_t main_af = 0.0;
@@ -140,7 +216,7 @@ void MisbehaviourDetector::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData,
 	}
 
 	if(m_areaFilter.isInside(lat,lon)==false) {
-		return;
+		return false;
 	}
 
 	if(m_logfile_name!="") {
@@ -154,7 +230,6 @@ void MisbehaviourDetector::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData,
 	}
 
 	// Update the database
-	ldmmap::vehicleData_t vehdata;
 	ldmmap::LDMMap::LDMMap_error_t db_retval;
 	
 	uint64_t gn_timestamp;
@@ -255,7 +330,7 @@ void MisbehaviourDetector::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData,
 					//fprintf(m_logfile_file,"[LOG - DATABASE UPDATE (Client %s)] Message discarded (data is too old). Rx = %lu, Stored = %lu, Gap = %lld\n",
 					//	m_client_id.c_str(),
 					//	gn_timestamp,retveh.vehData.gnTimestamp,gap);
-					return;
+					return false;
 				}
 			}
 		}
@@ -336,13 +411,14 @@ void MisbehaviourDetector::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData,
 		
 	}
 
-	std::cout << "[DEBUG] Updating vehicle with stationID: " << vehdata.stationID << std::endl;
-
-	db_retval=m_db_ptr->insert(vehdata);
-
-	if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
-		std::cerr << "Warning! Insert on the database for vehicle " << (int) stationID << "failed!" << std::endl;
-	}
+	// Old insert without any check
+	//std::cout << "[DEBUG] Updating vehicle with stationID: " << vehdata.stationID << std::endl;
+	//
+	//db_retval=m_db_ptr->insert(vehdata);
+	//
+	//if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
+	//	std::cerr << "Warning! Insert on the database for vehicle " << (int) stationID << "failed!" << std::endl;
+	//}
 
 	if(m_logfile_name!="") {
 		af=get_timestamp_ns();
@@ -413,10 +489,12 @@ void MisbehaviourDetector::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData,
 		// 	vehdata.camTimestamp,vehdata.gnTimestamp,get_timestamp_ms_cam()-vehdata.camTimestamp,get_timestamp_ms_gn()-vehdata.gnTimestamp,
 		// 	(main_af-main_bf)/1000000.0);	
 	}
+
+	return true;
 }
 
-void MisbehaviourDetector::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id) {
-	
+bool MisbehaviourDetector::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,std::vector<ldmmap::vehicleData_t> &PO_vec) {
+
 	uint64_t bf = 0.0,af = 0.0;
 	uint64_t main_af = 0.0;
 
@@ -446,8 +524,7 @@ void MisbehaviourDetector::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData,
 	        for(int j=0; j<PObjects_size;j++)
 	        {
 	            ldmmap::LDMMap::returnedVehicleData_t PO_ret_data;
-	            PerceivedObject_t *PO_seq=new PerceivedObject_t;
-				PO_seq = (PerceivedObject_t *) POcontainer.perceivedObjects.list.array[j];
+	            PerceivedObject_t *PO_seq = (PerceivedObject_t *) POcontainer.perceivedObjects.list.array[j];
 
 	            //Translate to ego vehicle coordinates
 	            ldmmap::vehicleData_t PO_data;
@@ -561,7 +638,7 @@ void MisbehaviourDetector::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData,
 	                            fprintf(m_logfile_file,"[LOG - DATABASE UPDATE (Client %s)] Message discarded (data is too old). Rx = %lu, Stored = %lu, Gap = %lld\n",
 	                                    m_client_id.c_str(),
 	                                    gn_timestamp,retveh.vehData.gnTimestamp,gap);
-	                            return;
+	                            return false;
 	                        }
 	                    }
 	                }
@@ -616,16 +693,14 @@ void MisbehaviourDetector::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData,
 	                //    fprintf(m_logfile_file,"\n");
 	                //}
 	            }
-	            db_retval=m_db_ptr->insert(PO_data);
-	            if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
-	                std::cerr << "Warning! Insert on the database for Perceived Object " << (int) PO_data.stationID << "failed!" << std::endl;
-	            }
+				PO_vec.emplace_back(PO_data);
 	        }
 	    }
 	}
+	return true;
 }
 
-void MisbehaviourDetector::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id) {
+bool MisbehaviourDetector::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id, ldmmap::vehicleData_t &vehdata) {
 	
 	uint64_t bf = 0.0,af = 0.0;
 	uint64_t main_af = 0.0;
@@ -645,7 +720,6 @@ void MisbehaviourDetector::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData,
 	}
 
 	// Update the database
-	ldmmap::vehicleData_t vehdata;
 	ldmmap::LDMMap::LDMMap_error_t db_retval;
 	
 	uint64_t gn_timestamp;
@@ -671,7 +745,7 @@ void MisbehaviourDetector::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData,
 					fprintf(m_logfile_file,"[LOG - DATABASE UPDATE (Client %s)] Message discarded (data is too old). Rx = %lu, Stored = %lu, Gap = %lld\n",
 						m_client_id.c_str(),
 						gn_timestamp,retveh.vehData.gnTimestamp,gap);
-					return;
+					return false;
 				}
 			}
 		}
@@ -749,11 +823,27 @@ void MisbehaviourDetector::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData,
 		//}
 	}
 	
-	db_retval=m_db_ptr->insert(vehdata);
-
-	if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
-		std::cerr << "Warning! Insert on the database for VRU " << (int) stationID << "failed!" << std::endl;
-	}
-	
 	ASN_STRUCT_FREE(asn_DEF_VAM,decoded_vam);
+
+	return true;
+}
+
+void MisbehaviourDetector::updateLastMessage(ldmmap::vehicleData_t vehdata) {
+	if (m_lastMessageCache.count(vehdata.stationID)==1) {
+		m_lastMessageCache[vehdata.stationID]=vehdata;
+	} else {
+		m_lastMessageCache.emplace(vehdata.stationID,vehdata);
+	}
+}
+
+uint64_t MisbehaviourDetector::checkCAMFreq(ldmmap::vehicleData_t vehdata) {
+	uint64_t MB_CODE=0;
+	//if present otherwise no way to check frequency
+	if (m_lastMessageCache.count(vehdata.stationID)==1) {
+		//checks if difference in timestamp is less than 100ms then freq>10Hz not allowed
+		if (vehdata.camTimestamp-m_lastMessageCache[vehdata.stationID].camTimestamp<100) {
+			MB_CODE=0x1;
+		}
+	}
+	return MB_CODE;
 }

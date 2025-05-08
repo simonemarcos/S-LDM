@@ -454,8 +454,11 @@ int main(int argc, char **argv) {
 	// Options passed just for future uses, may get removed
 	MisbehaviourDetector mbd(db_ptr,&sldm_opts,logfile_name);
 
-	if(sldm_opts.MBDetector_enabled==true) {
-		mbd.setDetectionEnable(true);
+	if(sldm_opts.MBDetector_enabled==false) {
+		std::cout << "[INFO] Misbehaviour Detector disabled." <<std::endl;
+		mbd.setDetectionEnable(false);
+	} else {
+		std::cout << "[INFO] Misbehaviour Detector enabled." <<std::endl;
 	}
 
 	// Set up the AMQP QuadKey filter for the AMQP client(s) (if more clients are spawned, the filter should be the same for all of them)

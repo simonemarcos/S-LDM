@@ -1188,6 +1188,8 @@ asn_TYPE_operation_t asn_OP_SET_OF = {
 	SET_OF_encode_der,
 	SET_OF_decode_xer,
 	SET_OF_encode_xer,
+	SET_OF_decode_jer,
+    SET_OF_encode_jer,
 #ifdef ASN_DISABLE_OER_SUPPORT
 	0,
 	0,

@@ -258,4 +258,21 @@ namespace ldmmap
 			val.first->unlock_shared();
 		}
 	}
+
+	LDMMap::LDMMap_error_t
+    LDMMap::getAllIDs(std::set<uint64_t> &selectedIDs) {
+        std::shared_lock<std::shared_mutex> lk(m_mainmapmut);
+
+        for(auto const& [key, val] : m_ldmmap) {
+            // Iterate over the single lower maps
+            val.first->lock_shared();
+
+            for(auto const& [keyl, vall] : val.second) {
+                selectedIDs.insert(vall.vehData.stationID);
+            }
+
+            val.first->unlock_shared();
+        }
+        return LDMMAP_OK;
+    }
 }

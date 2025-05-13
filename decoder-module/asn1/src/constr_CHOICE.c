@@ -62,10 +62,7 @@
 /*
  * See the definitions.
  */
-static unsigned _fetch_present_idx(const void *struct_ptr, unsigned off,
-                                   unsigned size);
-static void _set_present_idx(void *sptr, unsigned offset, unsigned size,
-                             unsigned pres);
+
 static const void *_get_member_ptr(const asn_TYPE_descriptor_t *,
                                    const void *sptr, asn_TYPE_member_t **elm,
                                    unsigned *present);
@@ -1108,7 +1105,7 @@ CHOICE_free(const asn_TYPE_descriptor_t *td, void *ptr,
  * is guaranteed to be aligned properly. ASN.1 compiler itself does not
  * produce packed code.
  */
-static unsigned
+unsigned
 _fetch_present_idx(const void *struct_ptr, unsigned pres_offset,
                    unsigned pres_size) {
     const void *present_ptr;
@@ -1129,7 +1126,7 @@ _fetch_present_idx(const void *struct_ptr, unsigned pres_offset,
 	return present;
 }
 
-static void
+void
 _set_present_idx(void *struct_ptr, unsigned pres_offset, unsigned pres_size,
                  unsigned present) {
     void *present_ptr;
@@ -1321,6 +1318,8 @@ asn_TYPE_operation_t asn_OP_CHOICE = {
 	CHOICE_encode_der,
 	CHOICE_decode_xer,
 	CHOICE_encode_xer,
+	CHOICE_decode_jer,
+    CHOICE_encode_jer,
 #ifdef	ASN_DISABLE_OER_SUPPORT
 	0,
 	0,

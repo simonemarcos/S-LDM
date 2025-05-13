@@ -20,6 +20,7 @@
 #include "LDMmap.h"
 #include "utils.h"
 #include "triggerManager.h"
+#include "MisbehaviourDetector.h"
 
 class AMQPClient : public proton::messaging_handler {
 	private:
@@ -36,6 +37,8 @@ class AMQPClient : public proton::messaging_handler {
 		areaFilter m_areaFilter;
 		struct options *m_opts_ptr;
 		ldmmap::LDMMap *m_db_ptr;
+		std::map<uint64_t, std::map<uint64_t,uint64_t>> m_recvCPMmap;  //! Structure mapping, for each CV that we have received a CPM from, the CPM's PO ids with the ego LDM's PO ids
+		MisbehaviourDetector *m_MBDetector_ptr;
 		indicatorTriggerManager *m_indicatorTrgMan_ptr;
 		bool m_indicatorTrgMan_enabled;
 
@@ -54,6 +57,11 @@ class AMQPClient : public proton::messaging_handler {
 		std::string m_quadKey_filter="";
 
 		std::atomic<proton::container *> m_cont;
+
+		void decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id);
+		void decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id);
+		void decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id);
+
 	public:
 		AMQPClient(const std::string &u,const std::string &a,const double &latmin,const double &latmax,const double &lonmin, const double &lonmax, struct options *opts_ptr, ldmmap::LDMMap *db_ptr, std::string logfile_name) :
 		conn_url_(u), addr_(a), max_latitude(latmax), max_longitude(lonmax), min_latitude(latmin), min_longitude(lonmin), m_opts_ptr(opts_ptr), m_db_ptr(db_ptr), m_logfile_name(logfile_name), m_quadKey_filter("") {
@@ -82,6 +90,10 @@ class AMQPClient : public proton::messaging_handler {
 			m_client_id="unset";
 			m_cont=nullptr;
 			m_idle_timeout_ms=-1;
+		}
+
+		void setMisbehaviourDetector(MisbehaviourDetector *MBDetector_ptr) {
+			m_MBDetector_ptr=MBDetector_ptr;
 		}
 
 		void setIndicatorTriggerManager(indicatorTriggerManager *indicatorTrgMan_ptr) {

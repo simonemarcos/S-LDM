@@ -22,6 +22,8 @@ asn_TYPE_operation_t asn_OP_INTEGER = {
 	INTEGER_encode_der,
 	INTEGER_decode_xer,
 	INTEGER_encode_xer,
+	INTEGER_decode_jer,
+    INTEGER_encode_jer,
 #ifdef  ASN_DISABLE_OER_SUPPORT
 	0,
 	0,
@@ -124,7 +126,7 @@ static const asn_INTEGER_enum_map_t *INTEGER_map_enum2value(
 /*
  * INTEGER specific human-readable output.
  */
-static ssize_t
+ssize_t
 INTEGER__dump(const asn_TYPE_descriptor_t *td, const INTEGER_t *st, asn_app_consume_bytes_f *cb, void *app_key, int plainOrXER) {
     const asn_INTEGER_specifics_t *specs =
         (const asn_INTEGER_specifics_t *)td->specifics;

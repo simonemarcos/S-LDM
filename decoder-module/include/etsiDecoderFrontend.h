@@ -14,7 +14,9 @@
 // MSGTYPE(<message name>,<messageID>)
 #define MSGTYPES(MSGTYPE) \
 	MSGTYPE(DENM,=1) \
-	MSGTYPE(CAM,=2)
+	MSGTYPE(CAM,=2) \
+	MSGTYPE(CPM,=3) \
+	MSGTYPE(VAM, =4)
 
 NAMED_ENUM_DECLARE(etsi_message_t,MSGTYPES);
 
@@ -25,10 +27,12 @@ namespace etsiDecoder {
 		ETSI_DECODED_DENM,
 		ETSI_DECODED_IVIM,
 		ETSI_DECODED_CPM,
+		ETSI_DECODED_VAM,
 		ETSI_DECODED_CAM_NOGN,
 		ETSI_DECODED_DENM_NOGN,
 		ETSI_DECODED_IVIM_NOGN,
-		ETSI_DECODED_CPM_NOGN
+		ETSI_DECODED_CPM_NOGN,
+		ETSI_DECODED_VAM_NOGN
 	} etsiDecodedType_e;
 
 	typedef struct etsiDecodedData {
@@ -36,6 +40,7 @@ namespace etsiDecoder {
 		etsiDecodedType_e type;
 
 		uint32_t gnTimestamp;
+		uint8_t GNaddress[8];
 		//For DENMs GeoArea
 		int32_t posLong;
 		int32_t posLat;

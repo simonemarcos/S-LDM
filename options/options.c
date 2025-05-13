@@ -470,6 +470,7 @@ void options_initialize(struct options *options) {
 	options->vehviz_update_interval_sec=DEFAULT_VEHVIZ_UPDATE_INTERVAL_SECONDS;
 
 	options->indicatorTrgMan_enabled=true;
+	options->MBDetector_enabled=true;
 
 	options->ageCheck_enabled=true;
 	options->quadkFilter_enabled=true;

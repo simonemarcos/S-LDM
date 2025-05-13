@@ -25,6 +25,8 @@ asn_TYPE_operation_t asn_OP_BIT_STRING = {
 	OCTET_STRING_encode_der,   /* Implemented in terms of OCTET STRING */
 	OCTET_STRING_decode_xer_binary,
 	BIT_STRING_encode_xer,
+    OCTET_STRING_decode_jer_hex,
+    BIT_STRING_encode_jer,
 #ifdef	ASN_DISABLE_OER_SUPPORT
 	0,
 	0,

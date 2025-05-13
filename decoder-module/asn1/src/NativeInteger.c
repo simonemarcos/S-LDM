@@ -27,6 +27,8 @@ asn_TYPE_operation_t asn_OP_NativeInteger = {
 	NativeInteger_encode_der,
 	NativeInteger_decode_xer,
 	NativeInteger_encode_xer,
+    NativeInteger_decode_jer,
+    NativeInteger_encode_jer,
 #ifdef	ASN_DISABLE_OER_SUPPORT
 	0,
 	0,

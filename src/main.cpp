@@ -37,7 +37,7 @@ std::condition_variable synccv;
 std::unordered_map<int,AMQPClient*> amqpclimap;
 std::mutex amqpclimutex;
 
-void AMQPclient_t(ldmmap::LDMMap *db_ptr,options_t *opts_ptr,std::string logfile_name,std::string clientID,unsigned int clientIndex,indicatorTriggerManager *itm_ptr,std::string quadKey_filter,AMQPClient *main_amqp_ptr) {
+void AMQPclient_t(ldmmap::LDMMap *db_ptr,options_t *opts_ptr,std::string logfile_name,std::string clientID,unsigned int clientIndex,indicatorTriggerManager *itm_ptr,std::string quadKey_filter,AMQPClient *main_amqp_ptr,MisbehaviourDetector *mbd_ptr) {
 	if(clientIndex >= MAX_ADDITIONAL_AMQP_CLIENTS-1) {
 		fprintf(stderr,"[FATAL ERROR] Error: there is a bug in the code, which attemps to spawn too many AMQP clients.\nPlease report this bug to the developers.\n");
 		fprintf(stderr,"Bug details: client id: %s - client index: %u - max supported clients: %u\n",clientID.c_str(),clientIndex,MAX_ADDITIONAL_AMQP_CLIENTS-1);
@@ -62,6 +62,9 @@ void AMQPclient_t(ldmmap::LDMMap *db_ptr,options_t *opts_ptr,std::string logfile
 			if(opts_ptr->indicatorTrgMan_enabled==true) {
 				recvClient.setIndicatorTriggerManager(itm_ptr);
 			}
+
+			// Set Misbehaviour Detector in any case, if disabled messages will just pass through
+			recvClient.setMisbehaviourDetector(mbd_ptr);
 
 			// Set username, if specified
 			if(options_string_len(opts_ptr->amqp_broker_x[clientIndex].amqp_username)>0) {
@@ -447,6 +450,14 @@ int main(int argc, char **argv) {
 		itm.setLeftTurnIndicatorEnable(true);
 	}
 
+	// Create a MisbehaviourDetector object (the same object will be then accessed by all the AMQP clients, when using more than one client)
+	// Options passed just for future uses, may get removed
+	MisbehaviourDetector mbd(&sldm_opts,logfile_name);
+
+	if(sldm_opts.MBDetector_enabled==true) {
+		mbd.setDetectionEnable(true);
+	}
+
 	// Set up the AMQP QuadKey filter for the AMQP client(s) (if more clients are spawned, the filter should be the same for all of them)
 	// -*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*
 	QuadKeys::QuadKeyTS tilesys;
@@ -510,7 +521,7 @@ int main(int argc, char **argv) {
 
 		for(unsigned int i=0;i<sldm_opts.num_amqp_x_enabled;i++) {
 			amqp_x_threads.emplace_back(AMQPclient_t,db_ptr,&sldm_opts,(logfile_name == "stdout" ? "stdout" : logfile_name + std::to_string(i+2)),
-				std::to_string(i+2),i,&itm,filter_str,&mainRecvClient);
+				std::to_string(i+2),i,&itm,filter_str,&mainRecvClient,&mbd);
 		}
 	}
 
@@ -530,6 +541,9 @@ int main(int argc, char **argv) {
 			if(sldm_opts.indicatorTrgMan_enabled==true) {
 				mainRecvClient.setIndicatorTriggerManager(&itm);
 			}
+
+			// Activate Misbehaviour Detector is enabled
+			mainRecvClient.setMisbehaviourDetector(&mbd);
 
 			// Set username, if specified
 			if(options_string_len(sldm_opts.amqp_broker_one.amqp_username)>0) {

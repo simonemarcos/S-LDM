@@ -28,6 +28,7 @@ asn_struct_print_f BIT_STRING_print;	/* Human-readable output */
 asn_struct_compare_f BIT_STRING_compare;
 asn_constr_check_f BIT_STRING_constraint;
 xer_type_encoder_f BIT_STRING_encode_xer;
+jer_type_encoder_f BIT_STRING_encode_jer;
 oer_type_decoder_f BIT_STRING_decode_oer;
 oer_type_encoder_f BIT_STRING_encode_oer;
 per_type_decoder_f BIT_STRING_decode_uper;
@@ -38,6 +39,7 @@ asn_random_fill_f  BIT_STRING_random_fill;
 #define BIT_STRING_decode_ber        OCTET_STRING_decode_ber
 #define BIT_STRING_encode_der        OCTET_STRING_encode_der
 #define BIT_STRING_decode_xer        OCTET_STRING_decode_xer_binary
+#define BIT_STRING_decode_jer OCTET_STRING_decode_jer_binary
 
 #ifdef __cplusplus
 }

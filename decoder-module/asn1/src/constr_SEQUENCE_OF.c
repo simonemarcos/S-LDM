@@ -264,6 +264,8 @@ asn_TYPE_operation_t asn_OP_SEQUENCE_OF = {
 	SEQUENCE_OF_encode_der,
 	SEQUENCE_OF_decode_xer,
 	SEQUENCE_OF_encode_xer,
+    SEQUENCE_OF_decode_jer,
+    SEQUENCE_OF_encode_jer,
 #ifdef	ASN_DISABLE_OER_SUPPORT
 	0,
 	0,

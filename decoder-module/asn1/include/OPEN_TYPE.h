@@ -11,6 +11,15 @@
 extern "C" {
 #endif
 
+#undef  ADVANCE
+#define ADVANCE(num_bytes)               \
+    do {                                 \
+        size_t num = num_bytes;          \
+        ptr = ((const char *)ptr) + num; \
+        size -= num;                     \
+        consumed_myself += num;          \
+    } while(0)
+
 #define OPEN_TYPE_free CHOICE_free
 #define OPEN_TYPE_print CHOICE_print
 #define OPEN_TYPE_compare CHOICE_compare
@@ -19,6 +28,8 @@ extern "C" {
 #define OPEN_TYPE_encode_der CHOICE_encode_der
 #define OPEN_TYPE_decode_xer NULL
 #define OPEN_TYPE_encode_xer CHOICE_encode_xer
+#define OPEN_TYPE_decode_jer NULL
+#define OPEN_TYPE_encode_jer CHOICE_encode_jer
 #define OPEN_TYPE_decode_uper NULL
 
 extern asn_TYPE_operation_t asn_OP_OPEN_TYPE;
@@ -38,6 +49,13 @@ asn_dec_rval_t OPEN_TYPE_xer_get(const asn_codec_ctx_t *opt_codec_ctx,
                                  void *parent_structure,
                                  const asn_TYPE_member_t *element,
                                  const void *ptr, size_t size);
+
+asn_dec_rval_t OPEN_TYPE_jer_get(
+                                const asn_codec_ctx_t *opt_codec_ctx,
+                                const asn_TYPE_descriptor_t *parent_type,
+                                void *parent_structure,
+                                const asn_TYPE_member_t *element,
+                                const void *ptr, size_t size);
 
 asn_dec_rval_t OPEN_TYPE_oer_get(const asn_codec_ctx_t *opt_codec_ctx,
                                  const asn_TYPE_descriptor_t *parent_type,

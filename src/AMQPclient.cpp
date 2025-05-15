@@ -383,17 +383,72 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		fprintf(m_logfile_file,"[LOG - MESSAGE DECODER (Client %s)] ProcTimeMilliseconds=%.6lf\n",m_client_id.c_str(),(af-bf)/1000000.0);
 	}
 
-	// If a CAM has been received, it should be used to update the internal in-memory database
-	if(decodedData.type == etsiDecoder::ETSI_DECODED_CAM || decodedData.type == etsiDecoder::ETSI_DECODED_CAM_NOGN) {
-		decodeCAM(decodedData,msg,on_msg_timestamp_us,main_bf,m_client_id);
-	} else if (decodedData.type == etsiDecoder::ETSI_DECODED_CPM || decodedData.type == etsiDecoder::ETSI_DECODED_CPM_NOGN) {
-		decodeCPM(decodedData,msg,on_msg_timestamp_us,main_bf,m_client_id);
-	} else if (decodedData.type == etsiDecoder::ETSI_DECODED_VAM || decodedData.type == etsiDecoder::ETSI_DECODED_VAM_NOGN) {
-		decodeVAM(decodedData,msg,on_msg_timestamp_us,main_bf,m_client_id);
+	ldmmap::vehicleData_t vehdata;
+	vehicleDataVector_t(PO_vec);
+	ldmmap::LDMMap::LDMMap_error_t db_retval;
+	uint64_t MBD_retval;
+
+	if (decodedData.type==etsiDecoder::ETSI_DECODED_CAM || decodedData.type==etsiDecoder::ETSI_DECODED_CAM_NOGN) {			
+		if (decodeCAM(decodedData,msg,on_msg_timestamp_us,main_bf,m_client_id,vehdata)==false) {
+			return;
+		}
+
+		if (m_MBDetection_enabled==true) {
+			if (m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec)!=0) {
+				std::cerr <<"Warning! Misbehaviour detected for vehicle " <<(int) vehdata.stationID <<". Message discarded" <<std::endl;
+				return;
+			}
+		}
+
+		std::cout << "[DEBUG] Updating vehicle with stationID: " << vehdata.stationID << std::endl;
+		db_retval=m_db_ptr->insert(vehdata);				
+		
+		if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
+			std::cerr << "Warning! Insert on the database for vehicle " << (int) vehdata.stationID << "failed!" << std::endl;
+		}
+
+	} else if (decodedData.type==etsiDecoder::ETSI_DECODED_CPM || decodedData.type==etsiDecoder::ETSI_DECODED_CPM_NOGN) {
+		if (decodeCPM(decodedData,msg,on_msg_timestamp_us,main_bf,m_client_id,PO_vec)==false) {
+			return;
+		}
+
+		if (m_MBDetection_enabled==true) {
+			if (m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec)!=0) {
+				std::cerr <<"Warning! Misbehaviour detected for vehicle " <<(int) vehdata.stationID <<". Message discarded" <<std::endl;
+				return;
+			}
+		}
+
+		for (ldmmap::vehicleData_t PO_data:PO_vec) {
+			db_retval=m_db_ptr->insert(PO_data);
+
+			if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
+				std::cerr << "Warning! Insert on the database for Perceived Object " << (int) PO_data.stationID << "failed!" << std::endl;
+			}
+		}
+
+	} else if (decodedData.type==etsiDecoder::ETSI_DECODED_VAM || decodedData.type==etsiDecoder::ETSI_DECODED_VAM_NOGN) {
+		if (decodeVAM(decodedData,msg,on_msg_timestamp_us,main_bf,m_client_id,vehdata)==false) {
+			return;
+		}
+
+		if (m_MBDetection_enabled==true) {
+			if (m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec)!=0) {
+				std::cerr <<"Warning! Misbehaviour detected for vehicle " <<(int) vehdata.stationID <<". Message discarded" <<std::endl;
+				return;
+			}
+		}
+
+		db_retval=m_db_ptr->insert(vehdata);
+
+		if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
+			std::cerr << "Warning! Insert on the database for VRU " << (int) vehdata.stationID << "failed!" << std::endl;
+		}
 	} else {
-		std::cerr << "Warning! Only CAM messages are supported for the time being!" << std::endl;
+		std::cerr << "Warning! Message type not supported!" << std::endl;
 		return;
 	}
+	return;
 }
 
 void 
@@ -403,7 +458,7 @@ AMQPClient::on_container_stop(proton::container &c) {
 	}
 }
 
-void AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id) {
+bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,ldmmap::vehicleData_t &vehdata) {
 
 	uint64_t bf = 0.0,af = 0.0;
 	uint64_t main_af = 0.0;
@@ -424,7 +479,7 @@ void AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	}
 
 	if(m_areaFilter.isInside(lat,lon)==false) {
-		return;
+		return false;
 	}
 
 	if(m_logfile_name!="") {
@@ -438,7 +493,6 @@ void AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	}
 
 	// Update the database
-	ldmmap::vehicleData_t vehdata;
 	ldmmap::LDMMap::LDMMap_error_t db_retval;
 	
 	uint64_t gn_timestamp;
@@ -539,7 +593,7 @@ void AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 					//fprintf(m_logfile_file,"[LOG - DATABASE UPDATE (Client %s)] Message discarded (data is too old). Rx = %lu, Stored = %lu, Gap = %lld\n",
 					//	m_client_id.c_str(),
 					//	gn_timestamp,retveh.vehData.gnTimestamp,gap);
-					return;
+					return false;
 				}
 			}
 		}
@@ -620,13 +674,14 @@ void AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 		
 	}
 
-	std::cout << "[DEBUG] Updating vehicle with stationID: " << vehdata.stationID << std::endl;
-
-	db_retval=m_db_ptr->insert(vehdata);
-
-	if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
-		std::cerr << "Warning! Insert on the database for vehicle " << (int) stationID << "failed!" << std::endl;
-	}
+	// Old insert without any check
+	//std::cout << "[DEBUG] Updating vehicle with stationID: " << vehdata.stationID << std::endl;
+	//
+	//db_retval=m_db_ptr->insert(vehdata);
+	//
+	//if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
+	//	std::cerr << "Warning! Insert on the database for vehicle " << (int) stationID << "failed!" << std::endl;
+	//}
 
 	if(m_logfile_name!="") {
 		af=get_timestamp_ns();
@@ -697,10 +752,12 @@ void AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 		// 	vehdata.camTimestamp,vehdata.gnTimestamp,get_timestamp_ms_cam()-vehdata.camTimestamp,get_timestamp_ms_gn()-vehdata.gnTimestamp,
 		// 	(main_af-main_bf)/1000000.0);	
 	}
+
+	return true;
 }
 
-void AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id) {
-	
+bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,std::vector<ldmmap::vehicleData_t> &PO_vec) {
+
 	uint64_t bf = 0.0,af = 0.0;
 	uint64_t main_af = 0.0;
 
@@ -730,8 +787,7 @@ void AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	        for(int j=0; j<PObjects_size;j++)
 	        {
 	            ldmmap::LDMMap::returnedVehicleData_t PO_ret_data;
-	            PerceivedObject_t *PO_seq=new PerceivedObject_t;
-				PO_seq = (PerceivedObject_t *) POcontainer.perceivedObjects.list.array[j];
+	            PerceivedObject_t *PO_seq = (PerceivedObject_t *) POcontainer.perceivedObjects.list.array[j];
 
 	            //Translate to ego vehicle coordinates
 	            ldmmap::vehicleData_t PO_data;
@@ -766,10 +822,12 @@ void AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	            PO_data.perceivedBy = (long) decoded_cpm->header.stationID;
 	            PO_data.stationType = ldmmap::StationType_LDM_detectedPassengerCar;
 
-	            if(m_recvCPMmap[fromStationID].find((long)PO_seq->objectId) == m_recvCPMmap[fromStationID].end()){
+				long objectId=(long) *PO_seq->objectId;
+	            if(m_recvCPMmap[fromStationID].find(objectId) == m_recvCPMmap[fromStationID].end()){
 	                // First time we have received this object from this vehicle
 	                //If PO id is already in local copy of LDM
-	                if(m_db_ptr->lookup( (long)PO_seq->objectId, PO_ret_data) == ldmmap::LDMMap::LDMMAP_OK)
+
+	                if(m_db_ptr->lookup(objectId, PO_ret_data) == ldmmap::LDMMap::LDMMAP_OK)
 	                {
 	                    // We need a new ID for object
 	                    std::set<uint64_t> IDs;
@@ -783,19 +841,19 @@ void AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	                        }
 	                    }
 	                    //Update recvCPMmap
-	                    m_recvCPMmap[fromStationID][ (long) PO_seq->objectId] = newID;
+	                    m_recvCPMmap[fromStationID][objectId] = newID;
 	                    PO_data.stationID = newID;
 	                }
 	                else
 	                {
 	                    //Update recvCPMmap
-	                    m_recvCPMmap[fromStationID][ (long) PO_seq->objectId] =  (long) PO_seq->objectId;
-	                    PO_data.stationID =  (long) PO_seq->objectId;
+	                    m_recvCPMmap[fromStationID][objectId] = objectId;
+	                    PO_data.stationID = objectId;
 	                }
 	            }
 	            else
 	            {
-	                PO_data.stationID = m_recvCPMmap[fromStationID][ (long) PO_seq->objectId];
+	                PO_data.stationID = m_recvCPMmap[fromStationID][objectId];
 	            }
 
 	            ldmmap::LDMMap::LDMMap_error_t db_retval;
@@ -845,26 +903,13 @@ void AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	                            fprintf(m_logfile_file,"[LOG - DATABASE UPDATE (Client %s)] Message discarded (data is too old). Rx = %lu, Stored = %lu, Gap = %lld\n",
 	                                    m_client_id.c_str(),
 	                                    gn_timestamp,retveh.vehData.gnTimestamp,gap);
-	                            return;
+	                            return false;
 	                        }
 	                    }
 	                }
 	            }
 
 	            PO_data.timestamp_us = get_timestamp_us();
-	            memcpy(PO_data.macaddr,&(decodedData.GNaddress[0])+2,6); // Save the vehicle MAC address into the database (the MAC address is stored in the last 6 Bytes of the GN Address)
-
-	            // Retrieve, if available, the information on the RSSI for the vehicle corresponding to the MAC address of the sender
-	            // This is the RSSI on the CPM dissemination interface
-	            // Uncomment this to retrieve the RSSI via iw, instead of using nl80211 (requires iw to be available in the system)
-	            // PO_data.rssi_dBm=get_rssi_from_iw(PO_data.macaddr,std::string(m_opts_ptr->dissemination_device.c_str()));
-	            
-				// DISATTIVATO RSSI
-				//if(m_nl_sock_info.sock_valid==true) {
-	            //    PO_data.rssi_dBm = get_rssi_from_netlink(PO_data.macaddr, m_nl_sock_info);
-	            //} else {
-	            //    PO_data.rssi_dBm = RSSI_UNAVAILABLE;
-	            //}
 
 	            if(m_logfile_name!="") {
 	                ldmmap::LDMMap::returnedVehicleData_t retveh;
@@ -875,41 +920,21 @@ void AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	                    l_inst_period=-1.0;
 	                }
 
-	                // If a pointer to a VDPGPSClient has been specified, log also the current position of the receiver
-	                //DISATTIVATO VDPGS
-					//std::pair<double,double> latlon;
-	                //if(m_gpsc_ptr!=nullptr) {
-	                //    latlon = m_gpsc_ptr->getCurrentPositionDbl();
-	                //}
-
 	                if(m_logfile_name!="") {
-	                    logfprintf(m_logfile_file,std::string("FULL CPM Perceived Object PROCESSING (Client ") + m_client_id + std::string(")"),"StationID=%u Coordinates=%.7lf:%.7lf Heading=%.1lf InstUpdatePeriod=%.3lf"
-	                                                                                                                           " MAC_Addr=%02X:%02X:%02X:%02X:%02X:%02X"
-	                                                                                                                           " RSSI=%.2lf",
+	                    logfprintf(m_logfile_file,std::string("FULL CPM Perceived Object PROCESSING (Client ") + m_client_id + std::string(")"),"StationID=%u Coordinates=%.7lf:%.7lf Heading=%.1lf InstUpdatePeriod=%.3lf\n",
 	                               PO_data.stationID,PO_data.lat,PO_data.lon,
 	                               PO_data.heading,
-	                               l_inst_period,
-	                               PO_data.macaddr[0],PO_data.macaddr[1],PO_data.macaddr[2],PO_data.macaddr[3],PO_data.macaddr[4],PO_data.macaddr[5],
-	                               PO_data.rssi_dBm);
+	                               l_inst_period);
 	                }
-
-					// DISATTIVATO VDPGS
-	                //if(m_gpsc_ptr!=nullptr) {
-	                //    fprintf(m_logfile_file," ReceiverCoordinates=%.7lf:%.7lf\n",latlon.first,latlon.second);
-	                //} else {
-	                //    fprintf(m_logfile_file,"\n");
-	                //}
 	            }
-	            db_retval=m_db_ptr->insert(PO_data);
-	            if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
-	                std::cerr << "Warning! Insert on the database for Perceived Object " << (int) PO_data.stationID << "failed!" << std::endl;
-	            }
+				PO_vec.emplace_back(PO_data);
 	        }
 	    }
 	}
+	return true;
 }
 
-void AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id) {
+bool AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id, ldmmap::vehicleData_t &vehdata) {
 	
 	uint64_t bf = 0.0,af = 0.0;
 	uint64_t main_af = 0.0;
@@ -928,8 +953,11 @@ void AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 		bf=get_timestamp_ns();
 	}
 
+	if(m_areaFilter.isInside(lat,lon)==false) {
+		return false;
+	}
+
 	// Update the database
-	ldmmap::vehicleData_t vehdata;
 	ldmmap::LDMMap::LDMMap_error_t db_retval;
 	
 	uint64_t gn_timestamp;
@@ -955,7 +983,7 @@ void AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 					fprintf(m_logfile_file,"[LOG - DATABASE UPDATE (Client %s)] Message discarded (data is too old). Rx = %lu, Stored = %lu, Gap = %lld\n",
 						m_client_id.c_str(),
 						gn_timestamp,retveh.vehData.gnTimestamp,gap);
-					return;
+					return false;
 				}
 			}
 		}
@@ -973,26 +1001,12 @@ void AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 		vehdata.heading = decoded_vam->vam.vamParameters.vruHighFrequencyContainer.heading.value/10.0;
 	}
 	
-
 	vehdata.speed_ms = decoded_vam->vam.vamParameters.vruHighFrequencyContainer.speed.speedValue/100.0;
 	vehdata.camTimestamp = static_cast<long>(decoded_vam->vam.generationDeltaTime);
 	vehdata.stationType = static_cast<ldmmap::e_StationTypeLDM>(decoded_vam->vam.vamParameters.basicContainer.stationType);
 	
 	vehdata.gnTimestamp = gn_timestamp;
 	vehdata.stationID = stationID; // It is very important to save also the stationID
-	memcpy(vehdata.macaddr,&(decodedData.GNaddress[0])+2,6); // Save the vehicle MAC address into the database (the MAC address is stored in the last 6 Bytes of the GN Address)
-	
-	// Retrieve, if available, the information on the RSSI for the vehicle corresponding to the MAC address of the sender
-	// This is the RSSI on the VAM dissemination interface
-	// Uncomment this to retrieve the RSSI via iw, instead of using nl80211 (requires iw to be available in the system)
-	// vehdata.rssi_dBm=get_rssi_from_iw(vehdata.macaddr,std::string(m_opts_ptr->dissemination_device.c_str()));
-	
-	// DISATTIVATO RSSI
-	//if(m_nl_sock_info.sock_valid==true) {
-	//	vehdata.rssi_dBm = get_rssi_from_netlink(vehdata.macaddr, m_nl_sock_info);
-	//} else {
-	//	vehdata.rssi_dBm = RSSI_UNAVAILABLE;
-	//}
 	
 	vehdata.vehicleWidth = ldmmap::OptionalDataItem<long>(false);
 	vehdata.vehicleLength = ldmmap::OptionalDataItem<long>(false);
@@ -1007,37 +1021,15 @@ void AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 			l_inst_period=-1.0;
 		}
 
-		// If a pointer to a VDPGPSClient has been specified, log also the current position of the receiver
-		// DISATTIVATO VDPGS
-		//std::pair<double,double> latlon;
-		//if(m_gpsc_ptr!=nullptr) {
-		//	latlon = m_gpsc_ptr->getCurrentPositionDbl();
-		//}
-
 		if(m_logfile_name!="") {
-			logfprintf(m_logfile_file,std::string("FULL VAM PROCESSING (Client ") + m_client_id + std::string(")"),"StationID=%u Coordinates=%.7lf:%.7lf Heading=%.1lf InstUpdatePeriod=%.3lf"
-				" MAC_Addr=%02X:%02X:%02X:%02X:%02X:%02X"
-				" RSSI=%.2lf",
+			logfprintf(m_logfile_file,std::string("FULL VAM PROCESSING (Client ") + m_client_id + std::string(")"),"StationID=%u Coordinates=%.7lf:%.7lf Heading=%.1lf InstUpdatePeriod=%.3lf\n",
 				stationID,lat,lon,
 				vehdata.heading,
-				l_inst_period,
-				vehdata.macaddr[0],vehdata.macaddr[1],vehdata.macaddr[2],vehdata.macaddr[3],vehdata.macaddr[4],vehdata.macaddr[5],
-				vehdata.rssi_dBm);
+				l_inst_period);
 		}
-
-		// DISATTIVATO VDPGS
-		//if(m_gpsc_ptr!=nullptr) {
-		//	fprintf(m_logfile_file," ReceiverCoordinates=%.7lf:%.7lf\n",latlon.first,latlon.second);
-		//} else {
-		//	fprintf(m_logfile_file,"\n");
-		//}
-	}
-	
-	db_retval=m_db_ptr->insert(vehdata);
-
-	if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
-		std::cerr << "Warning! Insert on the database for VRU " << (int) stationID << "failed!" << std::endl;
 	}
 	
 	ASN_STRUCT_FREE(asn_DEF_VAM,decoded_vam);
+
+	return true;
 }

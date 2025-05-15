@@ -207,24 +207,31 @@ function update_marker(mapref,id,lat,lon,stationtype,heading)
 					initial_icon = circleIcon;
 					initial_icon_idx = CIRCLE_ICO_IDX;
 				} else {
-                    if(stationtype === 110) {
-                        initial_icon = detectedPedestrianIcon;
-                        initial_icon_idx = DETECTED_PEDESTRIAN_ICO_IDX;
-                   } else {
-                        if (stationtype === 117) {
-                        initial_icon = detectedTruckIcon;
-                        initial_icon_idx = DETECTED_TRUCK_ICO_IDX;
-                    } else {
-                        initial_icon = carIcon;
-                        initial_icon_idx = CAR_ICO_IDX;
-                    }}
+					switch (stationtype) {
+						case 1:
+						case 110:
+							initial_icon = detectedPedestrianIcon;
+							initial_icon_idx = DETECTED_PEDESTRIAN_ICO_IDX;
+							break;
+						case 115:
+							initial_icon = detectedCarIcon;
+							initial_icon_idx = DETECTED_CAR_ICO_IDX;
+							break;
+						case 117:
+							initial_icon = detectedTruckIcon;
+							initial_icon_idx = DETECTED_TRUCK_ICO_IDX;
+							break;
+						default:
+							initial_icon = carIcon;
+							initial_icon_idx = CAR_ICO_IDX;
+					}
 				}
 			}
 
 			// Attempt to use an icon marker
 			newmarker = L.marker([lat,lon], {icon: initial_icon}).addTo(mapref);
 
-            if(stationtype === 110){
+            if(stationtype === 110 || stationtype === 1){
                newmarker.setRotationAngle(0);
             }else {
                newmarker.setRotationAngle(heading);
@@ -247,7 +254,7 @@ function update_marker(mapref,id,lat,lon,stationtype,heading)
 		} else {
 			let marker = markers[id];
 			marker.setLatLng([lat,lon]);
-            if(stationtype !== 110){
+            if(stationtype !== 110 && stationtype !== 1){
                marker.setRotationAngle(heading);
             }
 
@@ -268,16 +275,24 @@ function update_marker(mapref,id,lat,lon,stationtype,heading)
                 } else {
                     // If the heading becomes available after being unavailable, change the icon of the vehicle to the "car" icon
                     if(heading < VIS_HEADING_INVALID && (markersicons[id] === CIRCLE_ICO_IDX || markersicons[id] === GREEN_CIRCLE_ICO_IDX)) {
-                       if(stationtype === 110) {
-                           marker.setIcon(detectedPedestrianIcon);
-                           markersicons[id] = DETECTED_PEDESTRIAN_ICO_IDX;
-                        } else if(stationtype === 117) {
-                            marker.setIcon(detectedTruckIcon);
-                            markersicons[id] = DETECTED_TRUCK_ICO_IDX;
-                        } else {
-                           marker.setIcon(carIcon);
-                           markersicons[id] = CAR_ICO_IDX;
-                       }
+						switch (stationtype) {
+							case 1:
+							case 110:
+								marker.setIcon(detectedPedestrianIcon);
+								markersicons[id] = DETECTED_PEDESTRIAN_ICO_IDX;
+								break;
+							case 115:
+								marker.setIcon(detectedCarIcon);
+								markersicons[id] = DETECTED_CAR_ICO_IDX;
+								break;
+							case 117:
+								marker.setIcon(detectedTruckIcon);
+								markersicons[id] = DETECTED_TRUCK_ICO_IDX;
+								break;
+							default:
+								marker.setIcon(carIcon);
+								markersicons[id] = CAR_ICO_IDX;
+						}
                     }
                 }
 			} else {

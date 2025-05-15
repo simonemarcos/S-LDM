@@ -450,14 +450,6 @@ int main(int argc, char **argv) {
 		itm.setLeftTurnIndicatorEnable(true);
 	}
 
-	// Create a MisbehaviourDetector object (the same object will be then accessed by all the AMQP clients, when using more than one client)
-	// Options passed just for future uses, may get removed
-	MisbehaviourDetector mbd(&sldm_opts,logfile_name);
-
-	if(sldm_opts.MBDetector_enabled==true) {
-		mbd.setDetectionEnable(true);
-	}
-
 	// Set up the AMQP QuadKey filter for the AMQP client(s) (if more clients are spawned, the filter should be the same for all of them)
 	// -*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*
 	QuadKeys::QuadKeyTS tilesys;
@@ -496,6 +488,11 @@ int main(int argc, char **argv) {
 			fclose(logfile_file);
 		}
 	}
+
+	// Create a MisbehaviourDetector object (the same object will be then accessed by all the AMQP clients, when using more than one client)
+	// Options passed just for future uses, may get removed
+	MisbehaviourDetector mbd(&sldm_opts,logfile_name);
+	
 	// -*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*
 
 	// Create the main AMQP client object

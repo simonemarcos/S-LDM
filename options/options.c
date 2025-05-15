@@ -52,6 +52,7 @@
 #define LONGOPT_gn_timestamp_property "gn-timestamp-property"
 #define LONGOPT_enable_ext_lights_hijack "enable-ext-lights-hijack"
 #define LONGOPT_enable_interop_hijack "enable-interop-hijack"
+#define LONGOPT_disable_misbehaviour_detector "disable-misbehaviour-detector"
 // The corresponding "val"s are used internally and they should be set as sequential integers starting from 256 (the range 320-399 should not be used as it is reserved to the AMQP broker long options)
 #define LONGOPT_vehviz_update_interval_sec_val 256
 #define LONGOPT_indicator_trgman_disable_val 257
@@ -63,6 +64,7 @@
 #define LONGOPT_gn_timestamp_property_val 263
 #define LONGOPT_enable_ext_lights_hijack_val 264
 #define LONGOPT_enable_interop_hijack_val 265
+#define LONGOPT_disable_misbehaviour_detector_val 266
 
 // AMQP broker (additional)
 #define LONGOPT_amqp_enable_additionals "amqp-enable-additionals"
@@ -128,6 +130,7 @@ static const struct option long_opts[]={
 	{LONGOPT_gn_timestamp_property,					required_argument,	NULL, LONGOPT_gn_timestamp_property_val},
 	{LONGOPT_enable_ext_lights_hijack,			no_argument,		NULL, LONGOPT_enable_ext_lights_hijack_val},
 	{LONGOPT_enable_interop_hijack,			no_argument,		NULL, LONGOPT_enable_interop_hijack_val},
+	{LONGOPT_disable_misbehaviour_detector,			no_argument,		NULL, LONGOPT_disable_misbehaviour_detector_val},
 
 	// Additional AMQP clients options
 	{LONGOPT_amqp_enable_additionals,					required_argument,		NULL, LONGOPT_amqp_enable_additionals_val},
@@ -343,6 +346,11 @@ static const struct option long_opts[]={
 	"\t  to true, the data about specific vehicles is sent via REST with stationType=100 for easy filtering. Furthermore, if set\n" \
 	"\t  to true, these specific vehicles won't trigger data transmission via REST when a turn indicator is on.\n"
 
+#define OPT_disable_misbehaviour_detector \
+	"  --"LONGOPT_disable_misbehaviour_detector": when this options is specified, misbehaviour detection is disabled\n" \
+	"\t  any received message will be stored without running checks on it, messages can still be discarded by other checks,\n" \
+	"\t  eg. position filtering that is always enabled or ageCheck that is managed by its own option.\n" \
+
 static void print_long_info(char *argv0) {
 	fprintf(stdout,"\nUsage: %s [-A S-LDM coverage internal area] [options]\n"
 		"%s [-h | --"LONGOPT_h"]: print help and show options\n"
@@ -381,6 +389,7 @@ static void print_long_info(char *argv0) {
 		OPT_amqp_main_idle_timeout
 		OPT_amqp_main_reconn_local_timeout_exp
 		OPT_brokers_enable_description
+		OPT_disable_misbehaviour_detector
 		,
 		argv0,argv0,argv0);
 
@@ -753,6 +762,10 @@ unsigned int parse_options(int argc, char **argv, struct options *options) {
 
 			case LONGOPT_enable_interop_hijack_val:
 				options->interop_hijack_enable=true;
+				break;
+
+			case LONGOPT_disable_misbehaviour_detector_val:
+				options->MBDetector_enabled=false;
 				break;
 
 			// Additional AMQP clients options

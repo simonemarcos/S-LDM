@@ -34,8 +34,7 @@ class MisbehaviourDetector {
 			m_logfile_file=nullptr;
 		}
 		
-		bool processMessage(etsiDecoder::etsiDecodedData_t decoded_data, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id);
-		void setDetectionEnable(bool m_enable) {m_detection_enabled = m_enable;}
+		uint64_t processMessage(etsiDecoder::etsiDecodedData_t decoded_data,ldmmap::vehicleData_t vehdata, std::vector<ldmmap::vehicleData_t> PO_vec);
 
 		//remove from reported list, need to find a use for it
         void notifyOpTermination(uint64_t stationID);
@@ -48,11 +47,13 @@ class MisbehaviourDetector {
 		
 		private:
 		options_t *m_opts_ptr;
-		
-        bool m_detection_enabled;
-		
 		std::string m_logfile_name;
 		FILE *m_logfile_file;
+
+		std::map<uint64_t, ldmmap::vehicleData_t> m_lastMessageCache;
+
+		uint64_t checkCAMFreq(ldmmap::vehicleData_t vehdata) {return 0;}
+		void updateLastMessage(ldmmap::vehicleData_t vehdata) {}
 };
 
 #endif // MB_DETECTOR_H

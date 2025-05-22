@@ -103,6 +103,12 @@ namespace ldmmap {
 		std::string ipaddr;
 		std::string publicipaddr;
 
+		//patch MBD
+		int8_t direction;
+		int16_t longitudinalAcceleration;
+		int16_t curvature;
+		int16_t yawRate;
+
 	} vehicleData_t;
 }
 

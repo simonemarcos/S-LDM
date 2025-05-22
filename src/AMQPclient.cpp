@@ -458,7 +458,8 @@ AMQPClient::on_container_stop(proton::container &c) {
 	}
 }
 
-bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,ldmmap::vehicleData_t &vehdata) {
+bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us,
+	uint64_t main_bf, std::string m_client_id,ldmmap::vehicleData_t &vehdata) {
 
 	uint64_t bf = 0.0,af = 0.0;
 	uint64_t main_af = 0.0;
@@ -636,6 +637,12 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 		vehdata.vehicleLength = ldmmap::OptionalDataItem<long>(false);
 	}
 
+	//INSERIMENTO VALORI AGGIUNTIVI
+	vehdata.longitudinalAcceleration=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.longitudinalAcceleration.longitudinalAccelerationValue;
+	vehdata.curvature=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.curvature.curvatureValue;
+	vehdata.direction=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.driveDirection;
+	vehdata.yawRate=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.yawRate.yawRateValue;
+
 	/*
 	// Manage the low frequency container data
 	// Check if this CAM contains the low frequency container
@@ -756,7 +763,8 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	return true;
 }
 
-bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,std::vector<ldmmap::vehicleData_t> &PO_vec) {
+bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us,
+	uint64_t main_bf, std::string m_client_id,std::vector<ldmmap::vehicleData_t> &PO_vec) {
 
 	uint64_t bf = 0.0,af = 0.0;
 	uint64_t main_af = 0.0;
@@ -934,7 +942,8 @@ bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	return true;
 }
 
-bool AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id, ldmmap::vehicleData_t &vehdata) {
+bool AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us,
+	uint64_t main_bf, std::string m_client_id, ldmmap::vehicleData_t &vehdata) {
 	
 	uint64_t bf = 0.0,af = 0.0;
 	uint64_t main_af = 0.0;

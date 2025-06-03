@@ -51,6 +51,10 @@ class MisbehaviourDetector {
 			MB_ACCELERATION_VALUE_IMP,
 			MB_CURVATURE_IMP,
 			MB_YAW_RATE_IMP,
+
+			MB_BREACON_FREQ_INC,
+			MB_POSITION_SPEED_INC,
+			MB_POSITION_HEADING_INC,
 		} mbdMisbehaviourCode_e;
 		
 		uint64_t processMessage(etsiDecoder::etsiDecodedData_t decoded_data, ldmmap::vehicleData_t vehdata,
@@ -72,11 +76,8 @@ class MisbehaviourDetector {
 		std::map<int,double> maxSpeeds, maxAccelerations, maxCurvatures, maxYawRates;
 
 		uint64_t individualCAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables);
-
-		uint64_t checkCAMFreq(ldmmap::vehicleData_t vehdata) {return 0;}
 		void StatsInit();
 
-		void updateLastMessage(ldmmap::vehicleData_t vehdata) {}
 };
 
 #endif // MB_DETECTOR_H

@@ -57,10 +57,11 @@ namespace etsiDecoder {
 
 		if(isGeoNet == true) {
 			GeoNet geonet;
+			geonet.setSecurity(true);
 			btp BTP;
 			GNDataIndication_t gndataIndication;
 			BTPDataIndication_t btpDataIndication;
-
+			gndataIndication.lenght=buflen;
 			if(geonet.decodeGN(buffer,&gndataIndication)!= GN_OK)
 			  {
 			    std::cerr << "[WARN] [Decoder] Warning: GeoNet unable to decode a received packet." << std::endl;

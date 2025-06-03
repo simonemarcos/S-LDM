@@ -14,6 +14,7 @@
 #include "commonHeader.h"
 #include "shbHeader.h"
 #include "gbcHeader.h"
+#include "security.h"
 
 namespace etsiDecoder
 {
@@ -26,6 +27,7 @@ namespace etsiDecoder
 
         gnError_e decodeGN(unsigned char * packet, GNDataIndication_t* dataIndication);
 
+        void setSecurity(bool security){enableSecurity = security; m_security=Security();};
 
     private:
         GNDataIndication_t* processSHB(GNDataIndication_t* dataIndication);
@@ -33,6 +35,9 @@ namespace etsiDecoder
         GNDataIndication_t* processGBC(GNDataIndication_t* dataIndication, uint8_t shape);
 
         bool decodeLT(uint8_t lifeTime, double * seconds);
+
+        Security m_security;
+        bool enableSecurity;
 
         //ETSI 302 636-4-1 ANNEX H: GeoNetworking protocol constans
         uint8_t m_GnPtotocolVersion = 1;

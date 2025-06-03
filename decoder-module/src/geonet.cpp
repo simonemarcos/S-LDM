@@ -49,6 +49,7 @@ namespace etsiDecoder {
 
         basicH.removeHeader(dataIndication->data);
         dataIndication->data += 4;
+        dataIndication->lenght-=4;
         dataIndication->GNRemainingLife = basicH.GetLifeTime ();
         dataIndication->GNRemainingHL = basicH.GetRemainingHL ();
 
@@ -69,8 +70,14 @@ namespace etsiDecoder {
         if(basicH.GetNextHeader()==2) //a) if NH=0 or NH=1 proceed with common header procesing
         {
             //Secured packet
-            std::cerr << "[ERROR] [Decoder] Secured packet not supported" << std::endl;
-            return GN_SECURED_ERROR;
+            bool isCertificate;
+            if(m_security.extractSecurePacket (*dataIndication, isCertificate) == Security::SECURITY_VERIFICATION_FAILED) {
+                std::cout << "[INFO] [Decoder] Security verification failed" << std::endl;
+                return GN_SECURED_ERROR;
+            } else {
+                std::cout << "[INFO] [Decoder] Security verification successful" << std::endl;
+            }
+            
         }
         if(!decodeLT(basicH.GetLifeTime(),&dataIndication->GNRemainingLife))
         {

@@ -62,6 +62,14 @@ namespace ldmmap {
 		StationType_LDM_unspecified= 120
 	} e_StationTypeLDM;
 
+	typedef enum DataUnavailableValue {
+		speed=UINT64_MAX,
+		longitudinalAcceleration=INT16_MAX,
+		curvature=INT16_MAX,
+		driveDirection=UINT8_MAX,
+		yawRate=INT16_MAX,
+	} e_DataUnavailableValue;
+
 	// This structure contains all the data stored in the database for each vehicle (except for the PHPoints)
 	typedef struct vehicleData {
 		uint64_t stationID;
@@ -104,7 +112,7 @@ namespace ldmmap {
 		std::string publicipaddr;
 
 		//patch MBD
-		int8_t direction;
+		uint8_t driveDirection;
 		int16_t longitudinalAcceleration;
 		int16_t curvature;
 		int16_t yawRate;

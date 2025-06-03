@@ -6,6 +6,9 @@
 #include <proton/reconnect_options.hpp>
 #include <time.h>
 
+#include "Seq.hpp"
+#include "SequenceOf.hpp"
+#include "asn_utils.h"
 #include "utmuts.h"
 
 extern "C" {
@@ -394,8 +397,9 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		}
 
 		if (m_MBDetection_enabled==true) {
-			if (m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec)!=0) {
-				std::cerr <<"Warning! Misbehaviour detected for vehicle " <<(int) vehdata.stationID <<". Message discarded" <<std::endl;
+			MBD_retval=m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec);
+			if (MBD_retval!=0) {
+				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<(int) vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
 				return;
 			}
 		}
@@ -404,7 +408,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		db_retval=m_db_ptr->insert(vehdata);				
 		
 		if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
-			std::cerr << "Warning! Insert on the database for vehicle " << (int) vehdata.stationID << "failed!" << std::endl;
+			std::cerr << "[WARNING] Insert on the database for vehicle " << (int) vehdata.stationID << "failed!" << std::endl;
 		}
 
 	} else if (decodedData.type==etsiDecoder::ETSI_DECODED_CPM || decodedData.type==etsiDecoder::ETSI_DECODED_CPM_NOGN) {
@@ -413,8 +417,9 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		}
 
 		if (m_MBDetection_enabled==true) {
-			if (m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec)!=0) {
-				std::cerr <<"Warning! Misbehaviour detected for vehicle " <<(int) vehdata.stationID <<". Message discarded" <<std::endl;
+			MBD_retval=m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec);
+			if (MBD_retval!=0) {
+				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<(int) vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
 				return;
 			}
 		}
@@ -423,7 +428,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 			db_retval=m_db_ptr->insert(PO_data);
 
 			if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
-				std::cerr << "Warning! Insert on the database for Perceived Object " << (int) PO_data.stationID << "failed!" << std::endl;
+				std::cerr << "[WARNING] Insert on the database for Perceived Object " << (int) PO_data.stationID << "failed!" << std::endl;
 			}
 		}
 
@@ -433,8 +438,9 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		}
 
 		if (m_MBDetection_enabled==true) {
-			if (m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec)!=0) {
-				std::cerr <<"Warning! Misbehaviour detected for vehicle " <<(int) vehdata.stationID <<". Message discarded" <<std::endl;
+			MBD_retval=m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec);
+			if (MBD_retval!=0) {
+				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<(int) vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
 				return;
 			}
 		}
@@ -442,10 +448,10 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		db_retval=m_db_ptr->insert(vehdata);
 
 		if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
-			std::cerr << "Warning! Insert on the database for VRU " << (int) vehdata.stationID << "failed!" << std::endl;
+			std::cerr << "[WARNING] Insert on the database for VRU " << (int) vehdata.stationID << "failed!" << std::endl;
 		}
 	} else {
-		std::cerr << "Warning! Message type not supported!" << std::endl;
+		std::cerr << "[WARNING] Message type not supported!" << std::endl;
 		return;
 	}
 	return;
@@ -458,8 +464,7 @@ AMQPClient::on_container_stop(proton::container &c) {
 	}
 }
 
-bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us,
-	uint64_t main_bf, std::string m_client_id,ldmmap::vehicleData_t &vehdata) {
+bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,ldmmap::vehicleData_t &vehdata) {
 
 	uint64_t bf = 0.0,af = 0.0;
 	uint64_t main_af = 0.0;
@@ -606,7 +611,11 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	vehdata.on_msg_timestamp_us = on_msg_timestamp_us;
 	vehdata.elevation = decoded_cam->cam.camParameters.basicContainer.referencePosition.altitude.altitudeValue/100.0;
 	vehdata.heading = decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.heading.headingValue/10.0;
-	vehdata.speed_ms = decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.speed.speedValue/100.0;
+	if (decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.speed.speedValue!=SpeedValue_unavailable) {
+		vehdata.speed_ms = decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.speed.speedValue/100.0;
+	} else {
+		vehdata.speed_ms=ldmmap::e_DataUnavailableValue::speed;
+	}
 	vehdata.gnTimestamp = gn_timestamp;
 	vehdata.stationID = stationID; // It is very important to save also the stationID
 	vehdata.camTimestamp = static_cast<long>(decoded_cam->cam.generationDeltaTime);
@@ -638,11 +647,26 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	}
 
 	//INSERIMENTO VALORI AGGIUNTIVI
-	vehdata.longitudinalAcceleration=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.longitudinalAcceleration.longitudinalAccelerationValue;
-	vehdata.curvature=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.curvature.curvatureValue;
-	vehdata.direction=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.driveDirection;
-	vehdata.yawRate=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.yawRate.yawRateValue;
-
+	if (decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.longitudinalAcceleration.longitudinalAccelerationValue!=LongitudinalAccelerationValue_unavailable) {
+		vehdata.longitudinalAcceleration=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.longitudinalAcceleration.longitudinalAccelerationValue;
+	} else {
+		vehdata.longitudinalAcceleration=ldmmap::e_DataUnavailableValue::longitudinalAcceleration;
+	}
+	if (decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.curvature.curvatureValue!=CurvatureValue_unavailable) {
+		vehdata.curvature=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.curvature.curvatureValue;
+	} else {
+		vehdata.curvature=ldmmap::e_DataUnavailableValue::curvature;
+	}
+	if (decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.driveDirection!=DriveDirection_unavailable) {
+		vehdata.driveDirection=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.driveDirection;
+	} else {
+		vehdata.driveDirection=ldmmap::e_DataUnavailableValue::driveDirection;
+	}
+	if (decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.yawRate.yawRateValue!=YawRateValue_unavailable) {
+		vehdata.yawRate=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.yawRate.yawRateValue;
+	} else {
+		vehdata.yawRate=ldmmap::e_DataUnavailableValue::yawRate;
+	}
 	/*
 	// Manage the low frequency container data
 	// Check if this CAM contains the low frequency container
@@ -763,8 +787,7 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	return true;
 }
 
-bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us,
-	uint64_t main_bf, std::string m_client_id,std::vector<ldmmap::vehicleData_t> &PO_vec) {
+bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,std::vector<ldmmap::vehicleData_t> &PO_vec) {
 
 	uint64_t bf = 0.0,af = 0.0;
 	uint64_t main_af = 0.0;
@@ -772,10 +795,10 @@ bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	uint64_t fromStationID;
 
 	CPM_t *decoded_cpm = (CPM_t *) decodedData.decoded_msg;
-	double fromLat = (double) (decoded_cpm->payload.managementContainer.referencePosition.latitude / 10000000.0);
-	double fromLon = (double) (decoded_cpm->payload.managementContainer.referencePosition.longitude / 10000000.0);
+	double fromLat = asn1cpp::getField(decoded_cpm->payload.managementContainer.referencePosition.latitude, double) / 10000000.0;
+	double fromLon = asn1cpp::getField(decoded_cpm->payload.managementContainer.referencePosition.longitude, double) / 10000000.0;
 
-	fromStationID = (uint64_t) decoded_cpm->header.stationID;
+	fromStationID = asn1cpp::getField(decoded_cpm->header.stationID, uint64_t);
 
 	double l_inst_period=0.0;
 
@@ -783,86 +806,79 @@ bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	    bf=get_timestamp_ns();
 	}
 
-	int wrappedContainer_size = decoded_cpm->payload.cpmContainers.list.count;
+	int wrappedContainer_size = asn1cpp::sequenceof::getSize(decoded_cpm->payload.cpmContainers);
 	for (int i=0; i<wrappedContainer_size; i++)
 	{
-	    WrappedCpmContainer_t wrappedContainer = (WrappedCpmContainer_t) *decoded_cpm->payload.cpmContainers.list.array[i];
-	    WrappedCpmContainer__containerData_PR present = (WrappedCpmContainer__containerData_PR) wrappedContainer.containerData.present;
+		auto wrappedContainer = asn1cpp::sequenceof::getSeq(decoded_cpm->payload.cpmContainers,WrappedCpmContainer,i);
+		WrappedCpmContainer__containerData_PR present = asn1cpp::getField(wrappedContainer->containerData.present,WrappedCpmContainer__containerData_PR);
 	    if(present == WrappedCpmContainer__containerData_PR_PerceivedObjectContainer)
 	    {
-	        PerceivedObjectContainer_t POcontainer = (PerceivedObjectContainer_t) wrappedContainer.containerData.choice.PerceivedObjectContainer;
-	        int PObjects_size = POcontainer.perceivedObjects.list.count;
+	        auto POcontainer = asn1cpp::getSeq(wrappedContainer->containerData.choice.PerceivedObjectContainer,PerceivedObjectContainer);
+			int PObjects_size = asn1cpp::sequenceof::getSize(POcontainer->perceivedObjects);
 	        for(int j=0; j<PObjects_size;j++)
 	        {
 	            ldmmap::LDMMap::returnedVehicleData_t PO_ret_data;
-	            PerceivedObject_t *PO_seq = (PerceivedObject_t *) POcontainer.perceivedObjects.list.array[j];
+				auto PO_seq = asn1cpp::makeSeq(PerceivedObject);
+				PO_seq = asn1cpp::sequenceof::getSeq(POcontainer->perceivedObjects,PerceivedObject,j);
 
-	            //Translate to ego vehicle coordinates
-	            ldmmap::vehicleData_t PO_data;
-	            PO_data.detected = true;
-	            PO_data.vehicleLength = (long) PO_seq->objectDimensionX->value;
-	            PO_data.vehicleWidth = (long) PO_seq->objectDimensionY->value;
-	            PO_data.heading = (double) PO_seq->angles->zAngle.value / 10; // DECI constant was used
-	            PO_data.xSpeed = (long) PO_seq->velocity->choice.cartesianVelocity.xVelocity.value;
-	            PO_data.xSpeed = (long) PO_seq->velocity->choice.cartesianVelocity.yVelocity.value;
-	            PO_data.speed_ms = (sqrt (pow(PO_data.xSpeed,2) +
-	                                     pow(PO_data.ySpeed,2)))/ 100; // CENTI constant was used
+				//Translate to ego vehicle coordinates
+				ldmmap::vehicleData_t PO_data;
+				PO_data.detected = true;
+				PO_data.vehicleLength = asn1cpp::getField(PO_seq->objectDimensionX->value,long);
+				PO_data.vehicleWidth = asn1cpp::getField(PO_seq->objectDimensionY->value,long);
+				PO_data.heading = asn1cpp::getField(PO_seq->angles->zAngle.value,double) / DECI;
+				PO_data.xSpeed = asn1cpp::getField(PO_seq->velocity->choice.cartesianVelocity.xVelocity.value,long);
+				PO_data.xSpeed = asn1cpp::getField(PO_seq->velocity->choice.cartesianVelocity.yVelocity.value,long);
+				PO_data.speed_ms = (sqrt (pow(PO_data.xSpeed,2) +
+											pow(PO_data.ySpeed,2)))/CENTI;
 
-	            double lonPO, latPO, from_x,from_y,xDistance, yDistance;
-	            double gammar=0;
-	            double kr=0;
-	            xDistance = (double) PO_seq->position.xCoordinate.value/100;
-	            yDistance = (double) PO_seq->position.yCoordinate.value/100;
-	            transverse_mercator_t tmerc = UTMUPS_init_UTM_TransverseMercator();
-	            TransverseMercator_Forward(&tmerc, fromLon, fromLat, fromLon, &from_x, &from_y, &gammar, &kr);
-	            from_x += xDistance;
-	            from_y += yDistance;
-	            TransverseMercator_Reverse(&tmerc, fromLon, from_x, from_y, &latPO, &lonPO, &gammar, &kr);
-	            PO_data.lat = latPO;
-	            PO_data.lon = lonPO;
+				double lonPO, latPO, from_x,from_y,xDistance, yDistance;
+				double gammar=0;
+				double kr=0;
+				xDistance = asn1cpp::getField(PO_seq->position.xCoordinate.value,double)/100;
+				yDistance = asn1cpp::getField(PO_seq->position.yCoordinate.value,double)/100;
+				transverse_mercator_t tmerc = UTMUPS_init_UTM_TransverseMercator();
+				TransverseMercator_Forward(&tmerc, fromLon, fromLat, fromLon, &from_x, &from_y, &gammar, &kr);
+				from_x += xDistance;
+				from_y += yDistance;
+				TransverseMercator_Reverse(&tmerc, fromLon, from_x, from_y, &latPO, &lonPO, &gammar, &kr);
+				PO_data.lat = latPO;
+				PO_data.lon = lonPO;
+				PO_data.camTimestamp = static_cast<long>(asn1cpp::getField(decoded_cpm->payload.managementContainer.referenceTime,long)) - static_cast<long>(asn1cpp::getField(PO_seq->measurementDeltaTime,long));
+				PO_data.perceivedBy = asn1cpp::getField(decoded_cpm->header.stationID,long);
+				PO_data.stationType = ldmmap::StationType_LDM_detectedPassengerCar;
 
-				//asn_INTEGER2long conversion helper used for referenceTime TimestampIts_t to long
-				long referenceTime;
-				asn_INTEGER2long(&decoded_cpm->payload.managementContainer.referenceTime,&referenceTime);
-	            
-				PO_data.camTimestamp = referenceTime - (long) PO_seq->measurementDeltaTime;
-
-	            PO_data.perceivedBy = (long) decoded_cpm->header.stationID;
-	            PO_data.stationType = ldmmap::StationType_LDM_detectedPassengerCar;
-
-				long objectId=(long) *PO_seq->objectId;
-	            if(m_recvCPMmap[fromStationID].find(objectId) == m_recvCPMmap[fromStationID].end()){
-	                // First time we have received this object from this vehicle
-	                //If PO id is already in local copy of LDM
-
-	                if(m_db_ptr->lookup(objectId, PO_ret_data) == ldmmap::LDMMap::LDMMAP_OK)
-	                {
-	                    // We need a new ID for object
-	                    std::set<uint64_t> IDs;
-	                    m_db_ptr->getAllIDs (IDs);
-	                    int newID = 1;
-	                    for (int num : IDs) {
-	                        if (num == newID) {
-	                            ++newID;
-	                        } else if (num > newID) {
-	                            break;
-	                        }
-	                    }
-	                    //Update recvCPMmap
-	                    m_recvCPMmap[fromStationID][objectId] = newID;
-	                    PO_data.stationID = newID;
-	                }
-	                else
-	                {
-	                    //Update recvCPMmap
-	                    m_recvCPMmap[fromStationID][objectId] = objectId;
-	                    PO_data.stationID = objectId;
-	                }
-	            }
-	            else
-	            {
-	                PO_data.stationID = m_recvCPMmap[fromStationID][objectId];
-	            }
+				if(m_recvCPMmap[fromStationID].find(asn1cpp::getField(PO_seq->objectId,long)) == m_recvCPMmap[fromStationID].end()){
+					// First time we have received this object from this vehicle
+					//If PO id is already in local copy of LDM
+					if(m_db_ptr->lookup(asn1cpp::getField(PO_seq->objectId,long),PO_ret_data) == ldmmap::LDMMap::LDMMAP_OK)
+					{
+						// We need a new ID for object
+						std::set<uint64_t> IDs;
+						m_db_ptr->getAllIDs (IDs);
+						int newID = 1;
+						for (int num : IDs) {
+							if (num == newID) {
+								++newID;
+							} else if (num > newID) {
+								break;
+							}
+						}
+						//Update recvCPMmap
+						m_recvCPMmap[fromStationID][asn1cpp::getField(PO_seq->objectId,long)] = newID;
+						PO_data.stationID = newID;
+					}
+					else
+					{
+						//Update recvCPMmap
+						m_recvCPMmap[fromStationID][asn1cpp::getField(PO_seq->objectId,long)] = asn1cpp::getField(PO_seq->objectId,long);
+						PO_data.stationID = asn1cpp::getField(PO_seq->objectId,long);
+					}
+				}
+				else
+				{
+					PO_data.stationID = m_recvCPMmap[fromStationID][asn1cpp::getField(PO_seq->objectId,long)];
+				}
 
 	            ldmmap::LDMMap::LDMMap_error_t db_retval;
 
@@ -877,7 +893,7 @@ bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 
 	            // Check the age of the data store inside the database (if the age check is enabled / -g option not specified)
 	            // before updating it with the new receive data
-	            if(gn_timestamp != UINT64_MAX) {
+	            if(m_opts_ptr->ageCheck_enabled == true && gn_timestamp != UINT64_MAX) {
 	                ldmmap::LDMMap::returnedVehicleData_t retveh;
 
 	                if(m_db_ptr->lookup(PO_data.stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
@@ -942,8 +958,7 @@ bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	return true;
 }
 
-bool AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us,
-	uint64_t main_bf, std::string m_client_id, ldmmap::vehicleData_t &vehdata) {
+bool AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id, ldmmap::vehicleData_t &vehdata) {
 	
 	uint64_t bf = 0.0,af = 0.0;
 	uint64_t main_af = 0.0;
@@ -980,7 +995,7 @@ bool AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	
 	// Check the age of the data store inside the database (if the age check is enabled / -g option not specified)
 	// before updating it with the new receive data
-	if(gn_timestamp != UINT64_MAX){
+	if(m_opts_ptr->ageCheck_enabled == true && gn_timestamp != UINT64_MAX){
 		ldmmap::LDMMap::returnedVehicleData_t retveh;
 
 		if(m_db_ptr->lookup(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {

@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <cmath>
+#include "INIReader.h"
 
 uint64_t MisbehaviourDetector::processMessage(etsiDecoder::etsiDecodedData_t decoded_data, ldmmap::vehicleData_t vehdata, std::vector<ldmmap::vehicleData_t> PO_vec) {
 
@@ -89,98 +90,88 @@ void MisbehaviourDetector::notifyOpTermination(uint64_t stationID) {
 	m_already_reported_mutex.unlock();
 }
 
-void MisbehaviourDetector::StatsInit() {
-	int stationType;
-	for (stationType=0;stationType<=11;stationType++) {
+void MisbehaviourDetector::Init() {
+
+	int stationTypes[]={
+		ldmmap::StationType_LDM_bus,
+		ldmmap::StationType_LDM_cyclist,
+		ldmmap::StationType_LDM_detectedPassengerCar,
+		ldmmap::StationType_LDM_detectedPedestrian,
+		ldmmap::StationType_LDM_detectedTruck,
+		ldmmap::StationType_LDM_heavyTruck,
+		ldmmap::StationType_LDM_lightTruck,
+		ldmmap::StationType_LDM_moped,
+		ldmmap::StationType_LDM_motorcycle,
+		ldmmap::StationType_LDM_passengerCar,
+		ldmmap::StationType_LDM_pedestrian,
+		ldmmap::StationType_LDM_roadSideUnit,
+		ldmmap::StationType_LDM_specialVehicles,
+		ldmmap::StationType_LDM_trailer,
+		ldmmap::StationType_LDM_tram,
+	};
+
+	std::map<int,std::string> stationTypeNames={
+		{ldmmap::StationType_LDM_bus,"BUS"},
+		{ldmmap::StationType_LDM_cyclist,"CYCLIST"},
+		{ldmmap::StationType_LDM_detectedPassengerCar,"PASSENGER_CAR"},
+		{ldmmap::StationType_LDM_detectedPedestrian,"PEDESTRIAN"},
+		{ldmmap::StationType_LDM_detectedTruck,"TRUCK"},
+		{ldmmap::StationType_LDM_heavyTruck,"HEAVY_TRUCK"},
+		{ldmmap::StationType_LDM_lightTruck,"LIGHT_TRUCK"},
+		{ldmmap::StationType_LDM_moped,"MOPED"},
+		{ldmmap::StationType_LDM_motorcycle,"MOTORCYCLE"},
+		{ldmmap::StationType_LDM_passengerCar,"PASSENGER_CAR"},
+		{ldmmap::StationType_LDM_pedestrian,"PEDESTRIAN"},
+		{ldmmap::StationType_LDM_roadSideUnit,"RSU"},
+		{ldmmap::StationType_LDM_specialVehicles,"SPECIAL_VEHICLES"},
+		{ldmmap::StationType_LDM_trailer,"TRAILER"},
+		{ldmmap::StationType_LDM_tram,"TRAM"},
+	};
+	
+	INIReader reader("MBDConfig.ini");
+
+	if (reader.ParseError()!=0) {
+		std::cout <<"INI Error: " <<reader.ParseError() <<std::endl;
+	}
+
+	// MBD options if present
+	m_opts.useHaversineDistance=reader.GetBoolean("OPTIONS","UseHaversine",false);
+	m_opts.tolerance=reader.GetInteger("OPTIONS","Tolerance",10);
+	
+	// Default thresholds to be used if not specified in MBDConfig.ini
+	double maxSpeedGeneral=reader.GetInteger("GENERAL_THRESHOLDS","MaxSpeed",380);
+	double maxAccelerationGeneral=reader.GetInteger("GENERAL_THRESHOLDS","MaxAcceleration",20);
+	double maxBrakingGeneral=reader.GetInteger("GENERAL_THRESHOLDS","MaxBraking",50);
+	double maxCurvatureGeneral=reader.GetInteger("GENERAL_THRESHOLDS","MaxCurvature",50);
+	double maxYawRateGeneral=reader.GetInteger("GENERAL_THRESHOLDS","MaxYawRate",50);
+
+	double maxJerkGeneral=reader.GetInteger("GENERAL_THRESHOLDS","MaxJerk",6);
+
+	// Initialization per stationType
+	for (int stationType:stationTypes) {
 		averages[stationType].speed_ms=500;
 		deviations[stationType].speed_ms=50;
+
+		std::string section=stationTypeNames[stationType]+"_THRESHOLDS";
+
+		double maxSpeed=reader.GetInteger(section,"MaxSpeed",maxSpeedGeneral)/3.6; // in meters/second
+		maxSpeeds.insert(std::pair<int,double>(stationType,maxSpeed));
+
+		double maxAcceleration=reader.GetInteger(section,"MaxAcceleration",maxAccelerationGeneral);
+		maxAccelerations.insert(std::pair<int,double>(stationType,maxAcceleration));
+		
+		double maxBraking=reader.GetInteger(section,"MaxBraking",maxBrakingGeneral);
+		maxBrakings.insert(std::pair<int,double>(stationType,maxBraking));
+
+		double maxCurvature=reader.GetInteger(section,"MaxCurvature",maxCurvatureGeneral);
+		maxCurvatures.insert(std::pair<int,double>(stationType,maxCurvature));
+		
+		double maxYawRate=reader.GetInteger(section,"MaxYawRate",maxYawRateGeneral);
+		maxYawRates.insert(std::pair<int,double>(stationType,maxYawRate));
+
+		double maxJerk=reader.GetInteger(section,"MaxJerk",maxJerkGeneral);
+		maxJerks.insert(std::pair<int,double>(stationType,maxJerk));
 	}
-	averages[15].speed_ms=500;
-	deviations[15].speed_ms=50;
-	for (stationType=100;stationType<=108;stationType++) {
-		averages[stationType].speed_ms=500;
-		deviations[stationType].speed_ms=50;
-	}
-	averages[110].speed_ms=500;
-	deviations[110].speed_ms=50;
-	averages[115].speed_ms=500;
-	deviations[115].speed_ms=50;
-	averages[117].speed_ms=500;
-	deviations[117].speed_ms=50;
-	averages[120].speed_ms=500;
-	deviations[120].speed_ms=50;
-
-	maxSpeeds = {
-		{ldmmap::StationType_LDM_bus,130},
-		{ldmmap::StationType_LDM_cyclist,80},
-		{ldmmap::StationType_LDM_detectedPassengerCar,180},
-		{ldmmap::StationType_LDM_detectedPedestrian,20},
-		{ldmmap::StationType_LDM_detectedTruck,130},
-		{ldmmap::StationType_LDM_heavyTruck,110},
-		{ldmmap::StationType_LDM_lightTruck,130},
-		{ldmmap::StationType_LDM_moped,80},
-		{ldmmap::StationType_LDM_motorcycle,200},
-		{ldmmap::StationType_LDM_passengerCar,180},
-		{ldmmap::StationType_LDM_pedestrian,20},
-		{ldmmap::StationType_LDM_roadSideUnit,0},
-		{ldmmap::StationType_LDM_specialVehicles,60},
-		{ldmmap::StationType_LDM_trailer,110},
-		{ldmmap::StationType_LDM_tram,60}
-	};
-
-	maxAccelerations = {
-		{ldmmap::StationType_LDM_bus,130},
-		{ldmmap::StationType_LDM_cyclist,80},
-		{ldmmap::StationType_LDM_detectedPassengerCar,180},
-		{ldmmap::StationType_LDM_detectedPedestrian,20},
-		{ldmmap::StationType_LDM_detectedTruck,130},
-		{ldmmap::StationType_LDM_heavyTruck,110},
-		{ldmmap::StationType_LDM_lightTruck,130},
-		{ldmmap::StationType_LDM_moped,80},
-		{ldmmap::StationType_LDM_motorcycle,200},
-		{ldmmap::StationType_LDM_passengerCar,180},
-		{ldmmap::StationType_LDM_pedestrian,20},
-		{ldmmap::StationType_LDM_roadSideUnit,0},
-		{ldmmap::StationType_LDM_specialVehicles,60},
-		{ldmmap::StationType_LDM_trailer,110},
-		{ldmmap::StationType_LDM_tram,60}
-	};
-
-	maxCurvatures = {
-		{ldmmap::StationType_LDM_bus,130},
-		{ldmmap::StationType_LDM_cyclist,80},
-		{ldmmap::StationType_LDM_detectedPassengerCar,180},
-		{ldmmap::StationType_LDM_detectedPedestrian,20},
-		{ldmmap::StationType_LDM_detectedTruck,130},
-		{ldmmap::StationType_LDM_heavyTruck,110},
-		{ldmmap::StationType_LDM_lightTruck,130},
-		{ldmmap::StationType_LDM_moped,80},
-		{ldmmap::StationType_LDM_motorcycle,200},
-		{ldmmap::StationType_LDM_passengerCar,180},
-		{ldmmap::StationType_LDM_pedestrian,20},
-		{ldmmap::StationType_LDM_roadSideUnit,0},
-		{ldmmap::StationType_LDM_specialVehicles,60},
-		{ldmmap::StationType_LDM_trailer,110},
-		{ldmmap::StationType_LDM_tram,60}
-	};
-
-	maxYawRates = {
-		{ldmmap::StationType_LDM_bus,130},
-		{ldmmap::StationType_LDM_cyclist,80},
-		{ldmmap::StationType_LDM_detectedPassengerCar,180},
-		{ldmmap::StationType_LDM_detectedPedestrian,20},
-		{ldmmap::StationType_LDM_detectedTruck,130},
-		{ldmmap::StationType_LDM_heavyTruck,110},
-		{ldmmap::StationType_LDM_lightTruck,130},
-		{ldmmap::StationType_LDM_moped,80},
-		{ldmmap::StationType_LDM_motorcycle,200},
-		{ldmmap::StationType_LDM_passengerCar,180},
-		{ldmmap::StationType_LDM_pedestrian,20},
-		{ldmmap::StationType_LDM_roadSideUnit,0},
-		{ldmmap::StationType_LDM_specialVehicles,60},
-		{ldmmap::StationType_LDM_trailer,110},
-		{ldmmap::StationType_LDM_tram,60}
-	};
 }
 
 uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables) {
@@ -196,23 +187,20 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 	// Class 3 Topology checks
 	// speed>(averages[stationType].speed_ms+2*deviations[stationType].speed_ms)
 
-	// Class 1 checks
+	// ------- CLASS 1 CHECKS -------
 	{
+	// ------- PLAUSIBLE MAX SPEED CHECK -------
 
-	// Plausible max speed check
 	if (vehdata.speed_ms!=ldmmap::e_DataUnavailableValue::speed) {
 		if (vehdata.speed_ms*3.6>maxSpeeds[vehdata.stationType]) {
-			MB_CODE|=MB_CODE_CONV(MB_SPEED_VALUE_IMP);
+			MB_CODE|=MB_CODE_CONV(MB_SPEED_IMP);
 		}
 	} else {
-		unavailables|=MB_CODE_CONV(MB_SPEED_VALUE_IMP);
+		unavailables|=MB_CODE_CONV(MB_SPEED_IMP);
 	}
-
-	//if speed can be negative to mean retro
-	// Implausible speed in reverse
-	// if ((vehdata.direction==0 && vehdata.speed_ms*3.6<0) || (vehdata.direction==1 && vehdata.speed_ms*3.6>0)) {
 	
-	// Direction inconsistent with signed speed
+	// ------- DIRECTION INCONSISTENT WITH SIGNED SPEED -------
+
 	if (vehdata.driveDirection!=ldmmap::e_DataUnavailableValue::driveDirection) {
 		if (vehdata.speed_ms!=ldmmap::e_DataUnavailableValue::speed) {
 			if (vehdata.driveDirection==DriveDirection_backward && vehdata.speed_ms*3.6>30) {
@@ -223,16 +211,18 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 		unavailables|=MB_CODE_CONV(MB_DIRECTION_SPEED_IMP);
 	}
 
-	// Plausible max acceleration check
+	// ------- PLAUSIBLE MAX ACCELERATION CHECK -------
+
 	if (vehdata.longitudinalAcceleration!=ldmmap::e_DataUnavailableValue::longitudinalAcceleration) {
 		if (vehdata.longitudinalAcceleration>maxAccelerations[vehdata.stationType]) {
-			MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_VALUE_IMP);
+			MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_IMP);
 		}
 	} else {
-		unavailables|=MB_CODE_CONV(MB_ACCELERATION_VALUE_IMP);
+		unavailables|=MB_CODE_CONV(MB_ACCELERATION_IMP);
 	}
 
-	// Plausible max curvature check
+	// ------- PLAUSIBLE MAX CURVATURE CHECK -------
+
 	if (vehdata.curvature!=ldmmap::e_DataUnavailableValue::curvature) {
 		if (vehdata.curvature>maxCurvatures[vehdata.stationType]) {
 			MB_CODE|=MB_CODE_CONV(MB_CURVATURE_IMP);
@@ -241,7 +231,8 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 		unavailables|=MB_CODE_CONV(MB_CURVATURE_IMP);
 	}
 
-	// Plausible max curvature check
+	// ------- PLAUSIBLE MAX YAW RATE CHECK -------
+
 	if (vehdata.yawRate!=ldmmap::e_DataUnavailableValue::yawRate) {
 		if (vehdata.yawRate>maxYawRates[vehdata.stationType]) {
 			MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_IMP);
@@ -249,56 +240,121 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 	} else {
 		unavailables|=MB_CODE_CONV(MB_YAW_RATE_IMP);
 	}
-
 	}
 
-
-	// Class 2 checks
+	// ------- CLASS 2 CHECKS -------
 	if (lastMessagePresent) {
 
-		// in seconds?
-		double deltaTime=(vehdata.gnTimestamp-lastMessage.gnTimestamp)/1000.0;
-		std::cout <<"GN Timestamps: " <<vehdata.gnTimestamp <<" - " <<lastMessage.gnTimestamp <<std::endl;
-		std::cout <<"Delta Time: " <<deltaTime <<std::endl;
-		if (deltaTime<0) {
-			deltaTime+=4294967296;
-		}
+		// ------- BEACON FREQUENCY CHECK -------
 
-		// Beacon frequency check
-		if (deltaTime<0.1) {
+		double messageDeltaTime=(vehdata.gnTimestamp-lastMessage.gnTimestamp)/1000.0; // in seconds
+		if (messageDeltaTime<0) {
+			messageDeltaTime+=429496.7296; // divided by 1000 to be in seconds
+		}
+		if (messageDeltaTime<0.1) {
 			MB_CODE|=MB_CODE_CONV(MB_BREACON_FREQ_INC);
 		}
-
-		// Position change speed check
+		
+		// ------- POSITION CHANGE SPEED CHECK -------
 
 		const double radiansFactor=M_PI/180;
-        double dLat = (vehdata.lat - lastMessage.lat) * radiansFactor;
-        double dLon = (vehdata.lon - lastMessage.lon) * radiansFactor;
-        double a = pow(sin(dLat / 2), 2) + pow(sin(dLon / 2), 2) * cos(lastMessage.lat*radiansFactor) * cos(vehdata.lat*radiansFactor);
-        double rad = 6371;
-        double c = 2 * asin(sqrt(a));
-		double haversineDistance=rad*c*1000;
-		
-		
-		double euclideanDistance=rad*sqrt(pow(dLat, 2) + pow(dLon*cos(lastMessage.lat*radiansFactor), 2))*1000;
-
-		std::cout <<"Haversine: " <<haversineDistance <<std::endl;
-		std::cout <<"Measured: " <<euclideanDistance <<std::endl;
-		std::cout <<"Calculated: " <<lastMessage.speed_ms*deltaTime <<std::endl;
-
-		// distance between messages too far from previous speed
-		if (euclideanDistance>lastMessage.speed_ms*deltaTime*1.1 || euclideanDistance<lastMessage.speed_ms*deltaTime*0.9) {
+		const double dLat = (vehdata.lat - lastMessage.lat) * radiansFactor;
+		const double dLon = (vehdata.lon - lastMessage.lon) * radiansFactor;
+		const double earthRadius = 6371000; //in meters
+		double messagePositionDistance;
+		if (m_opts.useHaversineDistance) {
+			double a = pow(sin(dLat / 2), 2) + pow(sin(dLon / 2), 2) * cos(lastMessage.lat*radiansFactor) * cos(vehdata.lat*radiansFactor);
+			double c = 2 * asin(sqrt(a));
+			messagePositionDistance=earthRadius*c;
+		} else {
+			messagePositionDistance=earthRadius*sqrt(pow(dLat, 2) + pow(dLon*cos(lastMessage.lat*radiansFactor), 2));
+		}
+		double messagePositionSpeed=messagePositionDistance/messageDeltaTime;
+		// Average speed needed to travel the "message distance" is implausible
+		if (messagePositionSpeed>maxSpeeds[vehdata.stationType]) {
+			// MB_CODE TO BE DECIDED
+		}
+		double averageSpeed=(vehdata.speed_ms+lastMessage.speed_ms)/2.0;
+		// Calculated average speed doesn't match with average speed of the CAMs
+		if (messagePositionSpeed>(1+m_opts.tolerance)*averageSpeed || messagePositionSpeed<(1-m_opts.tolerance)*averageSpeed) {
 			MB_CODE|=MB_CODE_CONV(MB_POSITION_SPEED_INC);
 		}
 
-		// Position change heading check
-		double heading=fmod((atan2(dLon,dLat)/radiansFactor)+360,360);
+		// ------- POSITION CHANGE HEADING CHECK -------
 
-		std::cout <<"Previous: " <<lastMessage.heading <<std::endl;
-		std::cout <<"Calculated: " <<heading <<std::endl;
-
-		if (heading>lastMessage.heading*1.1 || heading<lastMessage.heading*0.9) {
+		double messageHeading=fmod((atan2(dLon,dLat)/radiansFactor)+360,360);
+		double averageHeading=(vehdata.heading+lastMessage.heading)/2.0;
+		// adjust for "left side" map heading
+		if (vehdata.heading>180 || lastMessage.heading>180) {
+			averageHeading+=180;
+		}
+		// Calculated average heading doesn't match with average heading of the CAMs
+		if (messageHeading>(1+m_opts.tolerance)*averageHeading || messageHeading<(1-m_opts.tolerance)*averageHeading) {
 			MB_CODE|=MB_CODE_CONV(MB_POSITION_HEADING_INC);
+		}
+
+		// ------- HEADING CHANGE SPEED CHECK -------
+
+		// ?
+
+		// ------- HEADING CHANGE YAW RATE CHECK -------
+
+		double messageHeadingYawRate=vehdata.heading-lastMessage.heading/messageDeltaTime; // in degrees/second
+		if (messageHeadingYawRate>maxYawRates[vehdata.stationType]) {
+			// MB_CODE TO BE DECIDED
+		}
+		double averageYawRate=(vehdata.yawRate+lastMessage.yawRate)/2.0;
+		if (messageHeadingYawRate>(1+m_opts.tolerance)*averageYawRate || messageHeadingYawRate<(1-m_opts.tolerance)*averageYawRate) {
+			MB_CODE|=MB_CODE_CONV(MB_HEADING_YAW_RATE_INC);
+		}
+
+		// ------- SPEED CHANGE ACCELERATION CHECK -------
+
+		double messageSpeedAcceleration=(vehdata.speed_ms-lastMessage.speed_ms)/messageDeltaTime;
+		// Average acceleration needed to reach message speed is implausible
+		if (messageSpeedAcceleration>0) {
+			if (messageSpeedAcceleration>maxAccelerations[vehdata.stationType]) {
+				// MB_CODE TO BE DECIDED
+			}
+		} else {
+			if (-messageSpeedAcceleration>maxBrakings[vehdata.stationType]) {
+				// MB_CODE TO BE DECIDED
+			}
+		}
+		double averageAcceleration=(vehdata.longitudinalAcceleration+lastMessage.longitudinalAcceleration)/2.0;
+		// Calculated average acceleration doesn't match with average acceleration of the CAMs
+		if (messageSpeedAcceleration>(1+m_opts.tolerance)*averageAcceleration || messageSpeedAcceleration<(1-m_opts.tolerance)*averageSpeed) {
+			MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_INC);
+		}
+
+		// ------- POSITION + HEADING DRIVE DIRECTION CHECK -------
+
+		// considering this as driving forward
+		if (averageHeading-90<messageHeading<averageHeading+90) {
+			if (lastMessage.driveDirection==DriveDirection_backward) {
+				MB_CODE|=MB_CODE_CONV(MB_POS_AND_HEADING_DIRECTION_INC);
+			}
+		} else {
+			if (lastMessage.driveDirection==DriveDirection_forward) {
+				MB_CODE|=MB_CODE_CONV(MB_POS_AND_HEADING_DIRECTION_INC);
+			}
+		}
+
+		// ------- LENGTH WIDTH CHANGE -------
+
+		if (vehdata.vehicleLength.isAvailable() && vehdata.vehicleWidth.isAvailable()) {
+			if (vehdata.vehicleLength.getData()!=lastMessage.vehicleLength.getData() || vehdata.vehicleWidth.getData()!=lastMessage.vehicleWidth.getData()) {
+				MB_CODE|=MB_CODE_CONV(MB_LENGTH_WIDTH_INC);
+			}
+		} else {
+			unavailables|=MB_CODE_CONV(MB_LENGTH_WIDTH_INC);
+		}
+
+		// ------- ACCELERATION CHECK -------
+
+		double messageAccelerationChange=vehdata.longitudinalAcceleration-lastMessage.longitudinalAcceleration;
+		if (messageAccelerationChange>maxJerks[vehdata.stationType] || -messageAccelerationChange<maxJerks[vehdata.stationType]) {
+			MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_INC);
 		}
 	}
 	

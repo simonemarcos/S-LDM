@@ -21,10 +21,15 @@ extern "C" {
 	#include "options.h"
 }
 
+typedef struct MBDOptions {
+	bool useHaversineDistance;
+	double tolerance;
+} MBDOptions_t;
+
 // Empty MBD, received messages from AMQPclient are just processed and inserted in LDM 
 class MisbehaviourDetector {
 	public:
-		MisbehaviourDetector(options_t *opts_ptr, std::string logfile_name) : m_opts_ptr(opts_ptr), m_logfile_name(logfile_name) {
+		MisbehaviourDetector(std::string logfile_name) : m_logfile_name(logfile_name) {
 			m_logfile_file=nullptr;
 			if (m_logfile_name!="") {
 				if (m_logfile_name=="stdout") {
@@ -33,28 +38,35 @@ class MisbehaviourDetector {
 					m_logfile_file=fopen(m_logfile_name.c_str(),"wa");
 				}
 			}
-			StatsInit();
+			Init();
 		}
 
-		MisbehaviourDetector(options_t *opts_ptr) : m_opts_ptr(opts_ptr) {
+		MisbehaviourDetector() {
 			m_logfile_name="";
 			m_logfile_file=nullptr;
-			StatsInit();
+			Init();
 		}
 		
 		//remove from reported list, need to find a use for it
         void notifyOpTermination(uint64_t stationID);
 		
 		typedef enum {
-			MB_SPEED_VALUE_IMP,
+			MB_SPEED_IMP,
 			MB_DIRECTION_SPEED_IMP,
-			MB_ACCELERATION_VALUE_IMP,
+			MB_ACCELERATION_IMP,
 			MB_CURVATURE_IMP,
 			MB_YAW_RATE_IMP,
 
 			MB_BREACON_FREQ_INC,
+			// The following codes correspond to: [first_name] change inconsistent with [second_name]
 			MB_POSITION_SPEED_INC,
 			MB_POSITION_HEADING_INC,
+			MB_HEADING_SPEED_INC,
+			MB_HEADING_YAW_RATE_INC,
+			MB_SPEED_ACCELERATION_INC,
+			MB_POS_AND_HEADING_DIRECTION_INC,
+			MB_LENGTH_WIDTH_INC,
+			MB_ACCELERATION_INC,
 		} mbdMisbehaviourCode_e;
 		
 		uint64_t processMessage(etsiDecoder::etsiDecodedData_t decoded_data, ldmmap::vehicleData_t vehdata,
@@ -66,18 +78,20 @@ class MisbehaviourDetector {
 		std::list<uint64_t> m_already_reported; // List of vehicles for which a report has been sent already (potentially use to not trust them)
 		
 	private:
-		options_t *m_opts_ptr;
 		std::string m_logfile_name;
 		FILE *m_logfile_file;
+
+		MBDOptions_t m_opts;
 
 		std::map<uint64_t, ldmmap::vehicleData_t> m_lastMessageCache;
 
 		std::map<int,ldmmap::vehicleData_t> averages, deviations;
 		std::map<int,double> maxSpeeds, maxAccelerations, maxCurvatures, maxYawRates;
-
+		std::map<int,double> maxBrakings; //absolute values of acceleration during braking
+		std::map<int,double> maxJerks;
+		
 		uint64_t individualCAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables);
-		void StatsInit();
-
+		void Init();
 };
 
 #endif // MB_DETECTOR_H

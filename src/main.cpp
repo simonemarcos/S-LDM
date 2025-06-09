@@ -491,7 +491,7 @@ int main(int argc, char **argv) {
 
 	// Create a MisbehaviourDetector object (the same object will be then accessed by all the AMQP clients, when using more than one client)
 	// Options passed just for future uses, may get removed
-	MisbehaviourDetector mbd(&sldm_opts,logfile_name);
+	MisbehaviourDetector mbd(logfile_name);
 	
 	// -*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*
 

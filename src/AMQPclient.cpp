@@ -648,7 +648,7 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 
 	//INSERIMENTO VALORI AGGIUNTIVI
 	if (decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.longitudinalAcceleration.longitudinalAccelerationValue!=LongitudinalAccelerationValue_unavailable) {
-		vehdata.longitudinalAcceleration=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.longitudinalAcceleration.longitudinalAccelerationValue;
+		vehdata.longitudinalAcceleration=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.longitudinalAcceleration.longitudinalAccelerationValue/10.0;
 	} else {
 		vehdata.longitudinalAcceleration=ldmmap::e_DataUnavailableValue::longitudinalAcceleration;
 	}
@@ -663,7 +663,7 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 		vehdata.driveDirection=ldmmap::e_DataUnavailableValue::driveDirection;
 	}
 	if (decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.yawRate.yawRateValue!=YawRateValue_unavailable) {
-		vehdata.yawRate=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.yawRate.yawRateValue;
+		vehdata.yawRate=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.yawRate.yawRateValue/10.0;
 	} else {
 		vehdata.yawRate=ldmmap::e_DataUnavailableValue::yawRate;
 	}

@@ -65,7 +65,7 @@ namespace etsiDecoder {
 			} msgType_e;
 
 			decoderFrontend();
-			int decodeEtsi(uint8_t *buffer,size_t buflen,etsiDecodedData_t &decoded_data, msgType_e msgtype = MSGTYPE_ITS, Security::Security_error_t &sec_retval);
+			int decodeEtsi(uint8_t *buffer,size_t buflen,etsiDecodedData_t &decoded_data, Security::Security_error_t &sec_retval, msgType_e msgtype = MSGTYPE_ITS);
 			void setPrintPacket(bool print_pkt) {m_print_pkt=print_pkt;}
 
 		private:

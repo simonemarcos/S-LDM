@@ -376,7 +376,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 	Security::Security_error_t sec_retval;
 	// Decode the content of the message, using the decoder-module frontend class
 	// m_decodeFrontend.setPrintPacket(true); // <- uncomment to print the bytes of each received message. Should be used for debug only, and should be kept disabled when deploying the S-LDM.
-	if(m_decodeFrontend.decodeEtsi(message_bin_buf, message_bin.size (), decodedData, etsiDecoder::decoderFrontend::MSGTYPE_AUTO,sec_retval)!=ETSI_DECODER_OK) {
+	if(m_decodeFrontend.decodeEtsi(message_bin_buf, message_bin.size (), decodedData, sec_retval, etsiDecoder::decoderFrontend::MSGTYPE_AUTO)!=ETSI_DECODER_OK) {
 		std::cerr << "Error! Cannot decode ETSI packet!" << std::endl;
 		return;
 	}

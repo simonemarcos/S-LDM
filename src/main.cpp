@@ -327,7 +327,8 @@ int main(int argc, char **argv) {
 	etsiDecoder::decoderFrontend decodeFrontend;
 	etsiDecoder::etsiDecodedData_t decodedData;
 
-	if(decodeFrontend.decodeEtsi((uint8_t *)&denm2_bytes[0], 190, decodedData)!=ETSI_DECODER_OK) {
+	Security::Security_error_t sec_retval;
+	if(decodeFrontend.decodeEtsi((uint8_t *)&denm2_bytes[0], 190, decodedData, sec_retval)!=ETSI_DECODER_OK) {
 		std::cerr << "Error! Cannot decode ETSI packet!" << std::endl;
 	}
 

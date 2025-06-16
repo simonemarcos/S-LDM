@@ -20,7 +20,7 @@ namespace etsiDecoder {
 		m_print_pkt = false;
 	}
 
-	int decoderFrontend::decodeEtsi(uint8_t *buffer,size_t buflen,etsiDecodedData_t &decoded_data,msgType_e msgtype, Security::Security_error_t &sec_retval) {
+	int decoderFrontend::decodeEtsi(uint8_t *buffer,size_t buflen,etsiDecodedData_t &decoded_data,Security::Security_error_t &sec_retval,msgType_e msgtype) {
 		bool isGeoNet = true;
 
 		if(buflen<=0) {

@@ -24,6 +24,8 @@ extern "C" {
 typedef struct MBDOptions {
 	bool useHaversineDistance;
 	double tolerance;
+	double maxTimeForConsecutive;
+	bool ignoreSecurity;
 } MBDOptions_t;
 
 // Empty MBD, received messages from AMQPclient are just processed and inserted in LDM 
@@ -51,12 +53,14 @@ class MisbehaviourDetector {
         void notifyOpTermination(uint64_t stationID);
 		
 		typedef enum {
+			//class 1
 			MB_SPEED_IMP,
 			MB_DIRECTION_SPEED_IMP,
 			MB_ACCELERATION_IMP,
 			MB_CURVATURE_IMP,
 			MB_YAW_RATE_IMP,
 
+			//class 2
 			MB_BREACON_FREQ_INC,
 			// The following codes correspond to: [first_name] change inconsistent with [second_name]
 			MB_POSITION_SPEED_INC,
@@ -67,6 +71,16 @@ class MisbehaviourDetector {
 			MB_POS_AND_HEADING_DIRECTION_INC,
 			MB_LENGTH_WIDTH_INC,
 			MB_ACCELERATION_INC,
+			MB_CURVATURE_SPEED_INC,
+			MB_CURVATURE_HEADING_INC,
+			MB_CURVATURE_YAW_RATE_INC,
+			MB_YAW_RATE_SPEED_INC,
+			MB_YAW_RATE_CURVATURE_INC,
+
+			//additional class 2 (class 1.5)
+			MB_POSITION_SPEED_IMP,
+			MB_HEADING_YAW_RATE_IMP,
+			MB_SPEED_ACCELERATION_IMP,
 		} mbdMisbehaviourCode_e;
 		
 		uint64_t processMessage(etsiDecoder::etsiDecodedData_t decoded_data, ldmmap::vehicleData_t vehdata,

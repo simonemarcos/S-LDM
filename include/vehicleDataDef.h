@@ -117,6 +117,8 @@ namespace ldmmap {
 		int16_t curvature;
 		int16_t yawRate;
 
+		//patch security
+		std::string certDigest;
 	} vehicleData_t;
 }
 

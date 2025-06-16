@@ -25,9 +25,7 @@ namespace etsiDecoder
 
         ~GeoNet();
 
-        gnError_e decodeGN(unsigned char * packet, GNDataIndication_t* dataIndication);
-
-        void setSecurity(bool security){enableSecurity = security; m_security=Security();};
+        gnError_e decodeGN(unsigned char * packet, GNDataIndication_t* dataIndication, Security::Security_error_t &sec_retval);
 
     private:
         GNDataIndication_t* processSHB(GNDataIndication_t* dataIndication);
@@ -37,7 +35,6 @@ namespace etsiDecoder
         bool decodeLT(uint8_t lifeTime, double * seconds);
 
         Security m_security;
-        bool enableSecurity;
 
         //ETSI 302 636-4-1 ANNEX H: GeoNetworking protocol constans
         uint8_t m_GnPtotocolVersion = 1;

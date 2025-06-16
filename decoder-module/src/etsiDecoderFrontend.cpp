@@ -20,7 +20,7 @@ namespace etsiDecoder {
 		m_print_pkt = false;
 	}
 
-	int decoderFrontend::decodeEtsi(uint8_t *buffer,size_t buflen,etsiDecodedData_t &decoded_data,msgType_e msgtype) {
+	int decoderFrontend::decodeEtsi(uint8_t *buffer,size_t buflen,etsiDecodedData_t &decoded_data,msgType_e msgtype, Security::Security_error_t &sec_retval) {
 		bool isGeoNet = true;
 
 		if(buflen<=0) {
@@ -56,13 +56,11 @@ namespace etsiDecoder {
 		asn_dec_rval_t decode_result;
 
 		if(isGeoNet == true) {
-			GeoNet geonet;
-			geonet.setSecurity(true);
 			btp BTP;
 			GNDataIndication_t gndataIndication;
 			BTPDataIndication_t btpDataIndication;
 			gndataIndication.lenght=buflen;
-			if(geonet.decodeGN(buffer,&gndataIndication)!= GN_OK)
+			if(geonet.decodeGN(buffer,&gndataIndication,sec_retval)!= GN_OK)
 			  {
 			    std::cerr << "[WARN] [Decoder] Warning: GeoNet unable to decode a received packet." << std::endl;
 			    return ETSI_DECODER_ERROR;

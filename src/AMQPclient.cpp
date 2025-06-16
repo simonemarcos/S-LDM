@@ -373,11 +373,28 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		bf=get_timestamp_ns();
 	}
 
+	Security::Security_error_t sec_retval;
 	// Decode the content of the message, using the decoder-module frontend class
 	// m_decodeFrontend.setPrintPacket(true); // <- uncomment to print the bytes of each received message. Should be used for debug only, and should be kept disabled when deploying the S-LDM.
-	if(m_decodeFrontend.decodeEtsi(message_bin_buf, message_bin.size (), decodedData, etsiDecoder::decoderFrontend::MSGTYPE_AUTO)!=ETSI_DECODER_OK) {
+	if(m_decodeFrontend.decodeEtsi(message_bin_buf, message_bin.size (), decodedData, etsiDecoder::decoderFrontend::MSGTYPE_AUTO,sec_retval)!=ETSI_DECODER_OK) {
 		std::cerr << "Error! Cannot decode ETSI packet!" << std::endl;
 		return;
+	}
+
+	if (sec_retval!=Security::SECURITY_OK) {
+		switch (sec_retval) {
+			// to be determined when to call MBD and what its actions will be
+			// m_MBDetector_ptr .createReport() ?
+			case Security::SECURITY_VERIFICATION_FAILED:
+				// at the moment it's either for bad decode (e.g. DENM not supported) or no certificates present
+				break;
+			case Security::SECURITY_INVALID_CERTIFICATE:
+				// certificate verification failed
+				break;
+			case Security::SECURITY_INVALID_DIGEST:
+				// digest verification failed
+				break;
+		}
 	}
 
 	if(m_logfile_name!="") {
@@ -399,7 +416,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		if (m_MBDetection_enabled==true) {
 			MBD_retval=m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec);
 			if (MBD_retval!=0) {
-				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<(int) vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
+				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
 				return;
 			}
 		}
@@ -408,7 +425,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		db_retval=m_db_ptr->insert(vehdata);				
 		
 		if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
-			std::cerr << "[WARNING] Insert on the database for vehicle " << (int) vehdata.stationID << "failed!" << std::endl;
+			std::cerr << "[WARNING] Insert on the database for vehicle " <<vehdata.stationID << "failed!" << std::endl;
 		}
 
 	} else if (decodedData.type==etsiDecoder::ETSI_DECODED_CPM || decodedData.type==etsiDecoder::ETSI_DECODED_CPM_NOGN) {
@@ -419,7 +436,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		if (m_MBDetection_enabled==true) {
 			MBD_retval=m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec);
 			if (MBD_retval!=0) {
-				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<(int) vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
+				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
 				return;
 			}
 		}
@@ -428,7 +445,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 			db_retval=m_db_ptr->insert(PO_data);
 
 			if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
-				std::cerr << "[WARNING] Insert on the database for Perceived Object " << (int) PO_data.stationID << "failed!" << std::endl;
+				std::cerr << "[WARNING] Insert on the database for Perceived Object " <<PO_data.stationID << "failed!" << std::endl;
 			}
 		}
 
@@ -440,7 +457,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		if (m_MBDetection_enabled==true) {
 			MBD_retval=m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec);
 			if (MBD_retval!=0) {
-				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<(int) vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
+				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
 				return;
 			}
 		}
@@ -448,7 +465,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		db_retval=m_db_ptr->insert(vehdata);
 
 		if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
-			std::cerr << "[WARNING] Insert on the database for VRU " << (int) vehdata.stationID << "failed!" << std::endl;
+			std::cerr << "[WARNING] Insert on the database for VRU " <<vehdata.stationID << "failed!" << std::endl;
 		}
 	} else {
 		std::cerr << "[WARNING] Message type not supported!" << std::endl;

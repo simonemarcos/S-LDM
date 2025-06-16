@@ -580,6 +580,7 @@ Security::extractSecurePacket (etsiDecoder::GNDataIndication_t &dataIndication, 
     std::string packetContent((char *) bufferCopy.data(), sizeB);
     ieeeData_decoded = asn1cpp::oer::decode(packetContent, Ieee1609Dot2Data);
     GNsecDP secureDataPacket;
+    uint64_t expiryTimestamp;
 
     // Secured DENM bad decode protection
     if (ieeeData_decoded.operator bool()==false) {
@@ -616,6 +617,15 @@ Security::extractSecurePacket (etsiDecoder::GNDataIndication_t &dataIndication, 
         if (present3 == SignerIdentifier_PR_digest) {
             isCertificate = false;
             secureDataPacket.content.signData.signerId.digest =  asn1cpp::getField (signedDataDecoded->signer.choice.digest, std::string);
+            m_digest=asn1cpp::getField(signedDataDecoded->signer.choice.digest,std::string);
+            m_digest.clear();
+            for (int i = 0; i < signedDataDecoded->signer.choice.digest.size; i++)
+            {
+                std::stringstream ss;
+                ss << std::hex << std::setw(2) << std::setfill('0') << (int)signedDataDecoded->signer.choice.digest.buf[i];
+                //ss <<c_hash[i];
+                m_digest += ss.str();
+            }
         } else if (present3 == SignerIdentifier_PR_certificate) {
             isCertificate = true;
             std::string verificationKey;
@@ -624,6 +634,51 @@ Security::extractSecurePacket (etsiDecoder::GNDataIndication_t &dataIndication, 
             for (int i = 0; i < size; i++) {
                 // Filling all certificate fields
                 auto certDecoded = asn1cpp::sequenceof::getSeq (signedDataDecoded->signer.choice.certificate, CertificateBase, i);
+                
+                expiryTimestamp=certDecoded->toBeSigned.validityPeriod.start+1072915200; //from time32 to unix epoch by adding the 01-01-2004 offset
+                switch (certDecoded->toBeSigned.validityPeriod.duration.present) {
+                    case Duration_PR_NOTHING:
+                        break;
+                    case Duration_PR_years:
+                        expiryTimestamp+=certDecoded->toBeSigned.validityPeriod.duration.choice.years*31556926;
+                        break;
+                    case Duration_PR_sixtyHours:
+                        expiryTimestamp+=certDecoded->toBeSigned.validityPeriod.duration.choice.sixtyHours*3600*60;
+                        break;
+                    case Duration_PR_hours:
+                        expiryTimestamp+=certDecoded->toBeSigned.validityPeriod.duration.choice.hours*3600;
+                        break;
+                    case Duration_PR_minutes:
+                        expiryTimestamp+=certDecoded->toBeSigned.validityPeriod.duration.choice.minutes*60;
+                        break;
+                    case Duration_PR_seconds:
+                        expiryTimestamp+=certDecoded->toBeSigned.validityPeriod.duration.choice.seconds;
+                        break;
+                    case Duration_PR_milliseconds:
+                        expiryTimestamp+=certDecoded->toBeSigned.validityPeriod.duration.choice.milliseconds/1000.0;
+                        break;
+                    case Duration_PR_microseconds:
+                        expiryTimestamp+=certDecoded->toBeSigned.validityPeriod.duration.choice.microseconds/1000000.0;
+                        break;
+                };
+                    
+                // !!! DIGEST CALCULATION !!!
+                std::string certHex = asn1cpp::oer::encode (certDecoded);
+                std::vector<unsigned char> cer_bytes = hexStringToBytes(certHex);
+                unsigned char c_hash[SHA256_DIGEST_LENGTH];
+                computeSHA256(cer_bytes, c_hash);
+                m_digest.clear();
+                for (int i = 24; i < 32; i++)
+                {
+                    std::stringstream ss;
+                    ss << std::hex << std::setw(2) << std::setfill('0') << (int)c_hash[i];
+                    //ss <<c_hash[i];
+                    m_digest += ss.str();
+                }
+                //std::vector<unsigned char> dig_bytes = hexStringToBytes(certDigest);
+                //certDigest.clear();
+                //certDigest=std::string(dig_bytes.begin(), dig_bytes.end());
+
                 GNcertificateDC newCert;
                 newCert.version = asn1cpp::getField (certDecoded->version, long);
                 newCert.type = asn1cpp::getField (certDecoded->type, long);
@@ -721,7 +776,7 @@ Security::extractSecurePacket (etsiDecoder::GNDataIndication_t &dataIndication, 
                 } // else if(signCertDecoded->present == etc...). Never present
                 secureDataPacket.content.signData.signerId.certificate.push_back(newCert);
 
-                std::string certHex = asn1cpp::oer::encode (certDecoded);
+                //std::string certHex = asn1cpp::oer::encode (certDecoded);
                 std::pair<std::string, std::string> pair = std::make_pair (verificationKey,certHex);
                 uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
                 m_receivedCertificates[timestamp] = pair;
@@ -759,6 +814,7 @@ Security::extractSecurePacket (etsiDecoder::GNDataIndication_t &dataIndication, 
 
         std::string tbs_hex = asn1cpp::oer::encode(tbsDecoded);
         //If it's certificates verify certificates otherwise verify the digest
+        m_digestStore.printAll();
         if (isCertificate) {
             if (m_receivedCertificates.empty()) {
                 std::cerr << "[INFO] No certificate received" << std::endl;
@@ -767,17 +823,21 @@ Security::extractSecurePacket (etsiDecoder::GNDataIndication_t &dataIndication, 
                 //for every item in map do signature verification
                 bool signValid = false;
                 for (auto const &item: m_receivedCertificates) {
+                    m_digestStore.insert_or_assign(m_digest,expiryTimestamp);
                     if (signatureVerification(tbs_hex, item.second.second,secureDataPacket.content.signData.signature,item.second.first)) {
                         signValid = true;
                         break;
                     }
                 }
                 if (!signValid) {
-                    return SECURITY_VERIFICATION_FAILED;
+                    return SECURITY_INVALID_CERTIFICATE;
                 }
             }
         } else {
             //no digest verification for now
+            if (!m_digestStore.isValid(m_digest)) {
+                return SECURITY_INVALID_DIGEST;
+            }
         }
     } else if (present1 == Ieee1609Dot2Content_PR_unsecuredData) { // Is it needed? Never present
         secureDataPacket.content.unsecuredData = asn1cpp::getField (contentDecoded->choice.unsecuredData, std::string);

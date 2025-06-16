@@ -19,6 +19,8 @@
 #include <fstream>
 #include <stdexcept>
 
+#include "DigestStore.h"
+
 extern "C" {
 #include "CAM.h"
 }
@@ -36,6 +38,8 @@ public:
   typedef enum {
     SECURITY_OK,
     SECURITY_VERIFICATION_FAILED,
+    SECURITY_INVALID_CERTIFICATE,
+    SECURITY_INVALID_DIGEST,
   } Security_error_t;
 
 
@@ -222,7 +226,7 @@ private:
   std::string m_p256_x_only_Cert;
   std::string m_SsigCert;
 
-
+  DigestStore m_digestStore;
 
 };
 #endif // SECURITY_H

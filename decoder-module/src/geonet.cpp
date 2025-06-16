@@ -40,7 +40,7 @@ namespace etsiDecoder {
     }
 
     gnError_e
-    GeoNet::decodeGN(unsigned char *packet, GNDataIndication_t* dataIndication)
+    GeoNet::decodeGN(unsigned char *packet, GNDataIndication_t* dataIndication, Security::Security_error_t &sec_retval)
     {
         basicHeader basicH;
         commonHeader commonH;
@@ -71,7 +71,8 @@ namespace etsiDecoder {
         {
             //Secured packet
             bool isCertificate;
-            if(m_security.extractSecurePacket (*dataIndication, isCertificate) == Security::SECURITY_VERIFICATION_FAILED) {
+            sec_retval=m_security.extractSecurePacket (*dataIndication, isCertificate);
+            if (sec_retval != Security::SECURITY_OK) {
                 std::cout << "[INFO] [Decoder] Security verification failed" << std::endl;
                 return GN_SECURED_ERROR;
             } else {

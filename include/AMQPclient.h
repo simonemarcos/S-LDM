@@ -22,8 +22,11 @@
 #include "triggerManager.h"
 #include "MisbehaviourDetector.h"
 
+#include "security.h"
+
 class AMQPClient : public proton::messaging_handler {
 	private:
+		Security m_security;
 		std::string conn_url_;
 		std::string addr_;
 		double max_latitude;

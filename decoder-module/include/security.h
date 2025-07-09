@@ -19,7 +19,7 @@
 #include <fstream>
 #include <stdexcept>
 
-#include "DigestStore.h"
+#include "CertificateStore.h"
 
 extern "C" {
 #include "CAM.h"
@@ -37,9 +37,9 @@ public:
 
   typedef enum {
     SECURITY_OK,
+    SECURITY_DIGEST,
     SECURITY_VERIFICATION_FAILED,
     SECURITY_INVALID_CERTIFICATE,
-    SECURITY_INVALID_DIGEST,
   } Security_error_t;
 
 
@@ -133,7 +133,7 @@ public:
   }GNsignMaterial;
 
   etsiDecoder::GNDataRequest_t createSecurePacket(etsiDecoder::GNDataRequest_t dataRequest, bool &isCertificate);
-  Security_error_t extractSecurePacket(etsiDecoder::GNDataIndication_t &dataIndication, bool &isCertificate);
+  Security_error_t extractSecurePacket(etsiDecoder::GNDataIndication_t &dataIndication, storedCertificate_t &certificateData);
 
 
   /**
@@ -225,8 +225,5 @@ private:
   std::string m_bitmapSsp2;
   std::string m_p256_x_only_Cert;
   std::string m_SsigCert;
-
-  DigestStore m_digestStore;
-
 };
 #endif // SECURITY_H

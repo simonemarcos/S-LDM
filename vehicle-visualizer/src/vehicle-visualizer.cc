@@ -146,6 +146,73 @@ vehicleVisualizer::sendMapDraw(double lat, double lon, double minlat, double min
 	return send_rval;
 }
 
+// This function sends an event object update to the vehicle visualizer server.
+int vehicleVisualizer::sendEventObjectUpdate(uint64_t objEveID, double lat, double lon, double ele, int TypeEvent) {
+//int vehicleVisualizer::sendEventObjectUpdate(uint64_t objEveID, double lat, double lon, double ele, int TypeEvent) {
+	if(m_is_connected==false) {
+		std::cerr << "Error: attempted to use a non-connected vehicle visualizer client." << std::endl;
+		exit(EXIT_FAILURE);
+	}
+
+	if(m_is_map_sent==false) {
+		std::cerr << "Error in vehicle visualizer client: attempted to send an object update before sending the map draw message." << std::endl;
+		exit(EXIT_FAILURE);
+	}
+
+	std::ostringstream oss;
+	int send_rval=-1;
+
+	//oss.precision();
+	oss.precision(7);
+	oss<<"event,"<<objEveID<<","<<lat<<","<<lon<<",";
+	oss.precision(2);
+	oss<<ele<<",";
+	oss.precision(3);
+	oss<<TypeEvent;
+
+	std::string msg_string = oss.str();
+	char *msg_buffer = new char[msg_string.length()+1];
+	std::copy(msg_string.c_str(), msg_string.c_str() + msg_string.length() + 1, msg_buffer);
+
+	send_rval=send(m_sockfd,msg_buffer,msg_string.length()+1,0);
+
+	delete[] msg_buffer;
+	std::cout <<"send_rval="<<send_rval<<std::endl;
+	return send_rval;
+}
+
+// This function sends an event object clean message to the vehicle visualizer server.
+int
+vehicleVisualizer::sendEventObjectClean(uint64_t objEveID)
+{
+	if(m_is_connected==false) {
+		std::cerr << "Error: attempted to use a non-connected vehicle visualizer client." << std::endl;
+		exit(EXIT_FAILURE);
+	}
+
+	if(m_is_map_sent==false) {
+		std::cerr << "Error in vehicle visualizer client: attempted to send an object clean message before sending the map draw message." << std::endl;
+		exit(EXIT_FAILURE);
+	}
+
+	std::ostringstream oss;
+	int send_rval=-1;
+
+	oss<<"objEventClean,"<<objEveID;
+
+	std::string msg_string = oss.str();
+	char *msg_buffer = new char[msg_string.length()+1];
+	std::copy(msg_string.c_str(), msg_string.c_str() + msg_string.length() + 1, msg_buffer);
+
+	send_rval=send(m_sockfd,msg_buffer,msg_string.length()+1,0);
+
+	delete[] msg_buffer;
+
+	std::cout <<"send_rval CLEAN="<<send_rval<<std::endl;
+	return send_rval;
+
+}
+
 int
 vehicleVisualizer::sendObjectUpdate(std::string objID, double lat, double lon, int stationType, double heading)
 {

@@ -13,10 +13,12 @@
 
 extern "C" {
 	#include "CAM.h"
+	#include "DENM.h"
 	#include "CPM.h"
 	#include "VAM.h"
 }
 
+std::atomic<bool> eventMapModified(false);
 namespace {
 	// Example custom function to configure an AMQP filter,
 	// specifically an APACHE.ORG:SELECTOR
@@ -46,7 +48,7 @@ namespace {
 // Check if this CAM contains the low frequency container
 // and if the ext. lights hack for older versions CAMs is disable
 // If yes, store the exterior lights status
-// If not, check if an older information about the exterior lights of the current vehicle already exist in the database (using m_db_ptr->lookup()),
+// If not, check if an older information about the exterior lights of the current vehicle already exist in the database (using m_db_ptr->lookupVehicle()),
 // if this data exists, use this data, if not, just set the exterior lights information as unavailable
 
 inline ldmmap::OptionalDataItem<uint8_t>
@@ -63,7 +65,7 @@ AMQPClient::manage_LowfreqContainer(CAM_t *decoded_cam,uint32_t stationID){
           } else {
                   ldmmap::LDMMap::returnedVehicleData_t retveh;
 
-                  if(m_db_ptr->lookup(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
+                  if(m_db_ptr->lookupVehicle(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
                           return retveh.vehData.exteriorLights;
                   } else {
                           return ldmmap::OptionalDataItem<uint8_t>(false);
@@ -374,26 +376,15 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 	}
 
 	Security::Security_error_t sec_retval;
+	storedCertificate_t certificateData;
 	// Decode the content of the message, using the decoder-module frontend class
 	// m_decodeFrontend.setPrintPacket(true); // <- uncomment to print the bytes of each received message. Should be used for debug only, and should be kept disabled when deploying the S-LDM.
-	if(m_decodeFrontend.decodeEtsi(message_bin_buf, message_bin.size (), decodedData, sec_retval, etsiDecoder::decoderFrontend::MSGTYPE_AUTO)!=ETSI_DECODER_OK) {
+	if(m_decodeFrontend.decodeEtsi(message_bin_buf, message_bin.size (), decodedData, sec_retval,certificateData, etsiDecoder::decoderFrontend::MSGTYPE_AUTO)!=ETSI_DECODER_OK) {
 		std::cerr << "Error! Cannot decode ETSI packet!" << std::endl;
 		return;
-	}
-
-	if (sec_retval!=Security::SECURITY_OK) {
-		switch (sec_retval) {
-			// to be determined when to call MBD and what its actions will be
-			// m_MBDetector_ptr .createReport() ?
-			case Security::SECURITY_VERIFICATION_FAILED:
-				// at the moment it's either for bad decode (e.g. DENM not supported) or no certificates present
-				break;
-			case Security::SECURITY_INVALID_CERTIFICATE:
-				// certificate verification failed
-				break;
-			case Security::SECURITY_INVALID_DIGEST:
-				// digest verification failed
-				break;
+	} else {
+		if (!certificateData.digest.empty()) {
+			m_certStore_ptr->insert_or_assign(certificateData.digest,certificateData);
 		}
 	}
 
@@ -413,6 +404,29 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 			return;
 		}
 
+		certificateData.stationID=vehdata.stationID;
+		certificateData.msg_timestamp=vehdata.gnTimestamp;
+		if (sec_retval!=Security::SECURITY_OK) {
+			switch (sec_retval) {
+				// to be determined when to call MBD and what its actions will be
+				// m_MBDetector_ptr .createReport() ?
+				case Security::SECURITY_VERIFICATION_FAILED:
+					// at the moment it's either for bad decode (e.g. DENM not supported) or no certificates present
+					break;
+				case Security::SECURITY_INVALID_CERTIFICATE:
+					// certificate verification failed
+					std::cout <<"\n\nCERTIFICATE INVALID\n";
+					break;
+				case Security::SECURITY_DIGEST:
+					std::cout <<"\n\nSECURITY ";
+					if (m_certStore_ptr->isValid(certificateData.digest)!=e_DigestValid_retval::DIGEST_OK) {
+						//digest invalid can use switch for each case instead
+						std::cout <<"DIGEST INVALID\n";
+					} else {std::cout <<"DIGEST VALID\n";}
+					break;
+			}
+		}
+
 		if (m_MBDetection_enabled==true) {
 			MBD_retval=m_MBDetector_ptr->processMessage(decodedData,vehdata,PO_vec);
 			if (MBD_retval!=0) {
@@ -422,11 +436,18 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		}
 
 		std::cout << "[DEBUG] Updating vehicle with stationID: " << vehdata.stationID << std::endl;
-		db_retval=m_db_ptr->insert(vehdata);				
+		db_retval=m_db_ptr->insertVehicle(vehdata);				
 		
 		if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
 			std::cerr << "[WARNING] Insert on the database for vehicle " <<vehdata.stationID << "failed!" << std::endl;
 		}
+
+	} else if (decodedData.type==etsiDecoder::ETSI_DECODED_DENM || decodedData.type==etsiDecoder::ETSI_DECODED_DENM_NOGN) {
+		if (decodeDENM(decodedData,msg,on_msg_timestamp_us,main_bf,m_client_id,vehdata)==false) {
+			return;
+		}
+
+
 
 	} else if (decodedData.type==etsiDecoder::ETSI_DECODED_CPM || decodedData.type==etsiDecoder::ETSI_DECODED_CPM_NOGN) {
 		if (decodeCPM(decodedData,msg,on_msg_timestamp_us,main_bf,m_client_id,PO_vec)==false) {
@@ -442,7 +463,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		}
 
 		for (ldmmap::vehicleData_t PO_data:PO_vec) {
-			db_retval=m_db_ptr->insert(PO_data);
+			db_retval=m_db_ptr->insertVehicle(PO_data);
 
 			if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
 				std::cerr << "[WARNING] Insert on the database for Perceived Object " <<PO_data.stationID << "failed!" << std::endl;
@@ -462,7 +483,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 			}
 		}
 
-		db_retval=m_db_ptr->insert(vehdata);
+		db_retval=m_db_ptr->insertVehicle(vehdata);
 
 		if(db_retval!=ldmmap::LDMMap::LDMMAP_OK && db_retval!=ldmmap::LDMMap::LDMMAP_UPDATED) {
 			std::cerr << "[WARNING] Insert on the database for VRU " <<vehdata.stationID << "failed!" << std::endl;
@@ -586,7 +607,7 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	if(m_opts_ptr->ageCheck_enabled == true && gn_timestamp != UINT64_MAX) {
 		ldmmap::LDMMap::returnedVehicleData_t retveh;
 
-		if(m_db_ptr->lookup(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
+		if(m_db_ptr->lookupVehicle(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
 			// According to the standard: GNTimestamp = (TAI timestamp since 2004-01-01 00:00:00) % 4294967296
 			// Due to the modulo operation, it is not enough to consider the difference between the received GNTimestamp and the one
 			// stored in the database, as this may cause issues when receiving data and the GNTimestamp values are cyclically reset
@@ -627,7 +648,11 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	vehdata.timestamp_us = get_timestamp_us();
 	vehdata.on_msg_timestamp_us = on_msg_timestamp_us;
 	vehdata.elevation = decoded_cam->cam.camParameters.basicContainer.referencePosition.altitude.altitudeValue/100.0;
-	vehdata.heading = decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.heading.headingValue/10.0;
+	if (decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.heading.headingValue!=HeadingValue_unavailable) {
+		vehdata.heading = decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.heading.headingValue/10.0;
+	} else {
+		vehdata.heading = ldmmap::e_DataUnavailableValue::heading;
+	}
 	if (decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.speed.speedValue!=SpeedValue_unavailable) {
 		vehdata.speed_ms = decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.speed.speedValue/100.0;
 	} else {
@@ -689,7 +714,7 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	// Check if this CAM contains the low frequency container
 	// and if the ext. lights hack for older versions CAMs is disable
 	// If yes, store the exterior lights status
-	// If not, check if an older information about the exterior lights of the current vehicle already exist in the database (using m_db_ptr->lookup()),
+	// If not, check if an older information about the exterior lights of the current vehicle already exist in the database (using m_db_ptr->lookupVehicle()),
 	// if this data exists, use this data, if not, just set the exterior lights information as unavailable
 	if(decoded_cam->cam.camParameters.lowFrequencyContainer!=NULL) {
 		// In any normal, uncorrupted CAM, buf should never be NULL and it should contain at least one element (i.e. buf[0] always exists)
@@ -702,7 +727,7 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	} else {
 		ldmmap::LDMMap::returnedVehicleData_t retveh;
 
-		if(m_db_ptr->lookup(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
+		if(m_db_ptr->lookupVehicle(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
 			vehdata.exteriorLights = retveh.vehData.exteriorLights;
 		} else {
 			vehdata.exteriorLights = ldmmap::OptionalDataItem<uint8_t>(false);
@@ -714,7 +739,7 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	if(m_logfile_name!="") {
 		ldmmap::LDMMap::returnedVehicleData_t retveh;
 
-		if(m_db_ptr->lookup(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
+		if(m_db_ptr->lookupVehicle(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
 			l_inst_period=(get_timestamp_us()-retveh.vehData.timestamp_us)/1000.0;
 		} else {
 			l_inst_period=-1.0;
@@ -790,7 +815,7 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 			vehdata.heading,
 			l_inst_period,
 			vehdata.camTimestamp,vehdata.gnTimestamp,get_timestamp_ms_cam()-vehdata.camTimestamp,get_timestamp_ms_gn()-vehdata.gnTimestamp,
-			(main_af-main_bf)/1000000.0,m_db_ptr->getCardinality ());
+			(main_af-main_bf)/1000000.0,m_db_ptr->getVehicleCardinality ());
 		
 		// fprintf(m_logfile_file,"[LOG - FULL CAM PROCESSING] StationID=%u Coordinates=%.7lf:%.7lf InstUpdatePeriod=%.3lf"
 		// 	" CAMTimestamp=%ld GNTimestamp=%lu CAMTimestampDiff=%ld GNTimestampDiff=%ld"
@@ -801,6 +826,205 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 		// 	(main_af-main_bf)/1000000.0);	
 	}
 
+	return true;
+}
+
+bool AMQPClient::decodeDENM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,ldmmap::vehicleData_t &vehdata) {
+	std::cout << " \nSTART DENM" << std::endl;//per test
+
+	uint64_t main_af = 0.0;
+	uint64_t bf_InsideArea = 0;
+	uint64_t af_InsideArea = 0;
+	uint64_t bf_updateDatabaseDENM = 0;
+	uint64_t af_updateDatabaseDENM = 0;
+	uint64_t bf_lookupAndUpdateEvent_time = 0;
+	uint64_t af_lookupAndUpdateEvent_time = 0;
+	uint64_t lookupAndUpdateEvent_time = 0;
+	uint64_t bf_insertEvent_time = 0;
+	uint64_t af_insertEvent_time = 0;
+	uint64_t af_databaseTimestamp_ns = 0;
+	uint64_t bf_databaseTimestamp_ns = 0;
+	uint64_t insertEvent_time = 0;
+
+	DENM_t *decoded_denm = (DENM_t *) decodedData.decoded_msg;
+	double lat = decoded_denm->denm.management.eventPosition.latitude/10000000.0;
+	double lon = decoded_denm->denm.management.eventPosition.longitude/10000000.0;
+	double ele = decoded_denm->denm.management.eventPosition.altitude.altitudeValue/100.0;
+	uint64_t originatingStationID = decoded_denm->denm.management.actionID.originatingStationID;
+	uint64_t sequenceNumber = decoded_denm->denm.management.actionID.sequenceNumber;
+	uint32_t stationTypeID = decoded_denm->denm.management.stationType;
+	m_logfile_name="stdout";
+	m_logfile_file=stdout;
+
+	if (m_logfile_name!=""){
+		bf_InsideArea = get_timestamp_ns();
+	}
+
+	if(m_areaFilter.isInside(lat,lon)==false) {
+
+		return false;
+	} else {
+		std::cout << "Inside Area Filter" << std::endl;//per test
+	}
+
+	if(m_logfile_name!="") {
+		af_InsideArea = get_timestamp_ns();
+
+		fprintf(m_logfile_file,"[LOG - AREA FILTER (Client %s)] ProcTimeMilliseconds=%.6lf\n",m_client_id.c_str(),(af_InsideArea - bf_InsideArea)/1000000.0);
+	}
+
+	if(m_logfile_name!="") {
+		bf_updateDatabaseDENM = get_timestamp_ns();
+	}
+
+	// Update the database
+	ldmmap::LDMMap::returnedEventData_t retEvent;
+	ldmmap::eventData_t eveData;
+	ldmmap::LDMMap::event_LDMMap_error_t db_everetval;
+	uint64_t nearUpdateEvent_key = 0;
+
+	eveData.gnTimestampDENM = decodedData.gnTimestamp*1e3; // Convert to microseconds
+
+	//Management container
+	//ActionID
+	eveData.on_msg_timestampDENM_us = on_msg_timestamp_us;
+	eveData.insertEventTimestamp_us = get_timestamp_us();
+	eveData.originatingStationID = originatingStationID;
+	eveData.sequenceNumber = sequenceNumber;
+
+	eveData.eventTermination = ldmmap::OptionalDataItem<uint64_t>(decoded_denm->denm.management.termination);
+	eveData.detectionTime = get_timestamp_us();
+	eveData.referenceTime = get_timestamp_us();
+	eveData.eventLatitude = lat;
+	eveData.eventLongitude = lon;
+	eveData.eventElevation = ele;
+	eveData.eventRelevanceDistance = ldmmap::OptionalDataItem<double> (decoded_denm->denm.management.relevanceDistance);
+	eveData.eventRelevanceTrafficDirection = ldmmap::OptionalDataItem<double> (decoded_denm->denm.management.relevanceTrafficDirection);
+	if (decoded_denm->denm.management.validityDuration != nullptr) {
+		eveData.eventValidityDuration = 10;
+	} else {
+		eveData.eventValidityDuration = 10; //default value
+	}
+
+	eveData.eventTransmissionInterval = ldmmap::OptionalDataItem<uint64_t>(decoded_denm->denm.management.transmissionInterval);
+	eveData.eventStationType = stationTypeID;
+
+	// Situation container
+	if (decoded_denm->denm.situation != nullptr) {
+
+		// If the eventType is not available, set the cause code to unknown
+		if(decoded_denm->denm.situation->eventType.causeCode != -1) {
+			ldmmap::e_EventTypeLDM CauseCode = static_cast<ldmmap::e_EventTypeLDM>(decoded_denm->denm.situation->eventType.causeCode);
+			eveData.eventCauseCode = CauseCode;
+		} else {
+			eveData.eventCauseCode = ldmmap::EventType_LDM_unknown;
+		}
+	} else {
+		eveData.eventCauseCode = ldmmap::EventType_LDM_unknown;
+	}
+
+	uint64_t keyEvent = m_db_ptr->KEY_EVENT(lat,lon,ele,eveData.eventCauseCode);
+
+	if (!eveData.eventTermination.isAvailable()) {
+		bf_lookupAndUpdateEvent_time = get_timestamp_ns();
+		db_everetval = m_db_ptr->lookupAndUpdateEvent(keyEvent,eveData.eventLatitude,eveData.eventLongitude,
+			eveData.eventCauseCode,eveData,retEvent, nearUpdateEvent_key);
+		af_lookupAndUpdateEvent_time = get_timestamp_ns();
+		lookupAndUpdateEvent_time = af_lookupAndUpdateEvent_time - bf_lookupAndUpdateEvent_time;
+		if (db_everetval == 6) {
+			//std::cout <<"EVENT NOT FOUND" << std::endl; //For test
+		} else if (db_everetval == 2 || db_everetval == 3) {
+			eventMapModified.store(true);
+			std::cout << "Updated Near Event Key: " << nearUpdateEvent_key << std::endl;
+		}
+		//std::cout <<"Result of lookupAndUpdate = " << db_everetval << std::endl; //For test
+		if (db_everetval == ldmmap::LDMMap::event_LDMMAP_ITEM_NOT_FOUND) {
+			bf_insertEvent_time	= get_timestamp_ns();
+			db_everetval = m_db_ptr->insertEvent(eveData,keyEvent);
+			af_insertEvent_time = get_timestamp_ns();
+			insertEvent_time = af_insertEvent_time - bf_insertEvent_time;
+			eventMapModified.store(true);
+			//std::cout <<"INSERT EVENT with KEY: " <<keyEvent << std::endl; //For test
+		}
+	} else {
+		db_everetval = m_db_ptr->removeEvent(keyEvent);
+		eventMapModified.store(true);
+		//std::cout <<"REMOVE EVENT with KEY: " <<keyEvent << std::endl; //For test
+	}
+
+	if(m_logfile_name!="") {
+		af_updateDatabaseDENM = get_timestamp_ns();
+
+		fprintf(m_logfile_file,"[LOG - DATABASE UPDATE (Client %s)] FunctionReturnValue=%d ProcTimeMilliseconds=%.6lf\n",
+			m_eventclient_id.c_str(),
+			db_everetval, (af_updateDatabaseDENM - bf_updateDatabaseDENM)/1e3);
+	}
+
+	if(m_logfile_name!="") {
+		main_af = get_timestamp_ns();
+
+		logfprintf(m_logfile_file,std::string("FULL DENM PROCESSING (Client") + m_eventclient_id + std::string(")"), "eventKey=%lu"
+			"OriginatingStationID=%u sequenceNumber=%d Coordinates=%.7lf:%.7lf:%.2lf eventStationType=%lf"
+			" DENM_ReferenceTime=%ld GNTimestamp=%lu DENM_DetectionTime=%ld DENM_ValidityDuration=%d ProcTimeMilliseconds=%.6lf EventCardinality=%d\n",
+			keyEvent,originatingStationID,sequenceNumber,lat,lon,ele,
+			eveData.eventStationType,eveData.referenceTime,eveData.gnTimestampDENM,eveData.detectionTime, eveData.eventValidityDuration,
+			(main_af-main_bf)/1e6,m_db_ptr->getEventCardinality ());
+
+	}else {
+		std::cerr << "Warning! Problem to print a DENM!" << std::endl;
+	}
+	//std::cout <<"END OF DENM\n" << std::endl; //For test
+
+	// Write the DENM timestamps to a CSV file
+	std::ofstream file("DENMtimestamps_25v.csv", std::ios::app);
+	if (!file) {
+		std::cerr << "Errore nell'apertura del file!" << std::endl;
+		return false;
+	}
+
+	// If the file is empty, write the header
+	static bool first_time = true;
+	if (first_time) {
+		file << "TotalMessageProcessingTimeDENM [us],DatabaseUpdateDENM [us],"
+		"LookupAndUpdateEvent_Time [us],InsertEvent_Time [us],DecodedMessageProcessingTime [us]\n";
+		first_time = false;
+	}
+
+	// Write the timestamps to the file
+	file << (main_af-main_bf)/1e3 << "," << (af_updateDatabaseDENM-bf_updateDatabaseDENM)/1e3 << ","
+	<< lookupAndUpdateEvent_time/1e3 << "," << insertEvent_time/1e3 << "," << (main_af-eveData.gnTimestampDENM)/1e3 << "\n";
+
+	file.close(); // Close the file
+
+	/*std::ofstream file1("DENM.csv", std::ios::app);
+	if (!file1) {
+		std::cerr << "Errore nell'apertura del file!" << std::endl;
+		return;
+	}
+
+	// File per
+	static bool first_time1 = true;
+	if (first_time1) {
+		file1 << "KEY_EVENT, near Event Key, Operation, Latitude, Longitude, Elevation, Cause_Code\n";
+		first_time = false;
+	}
+
+	// Converte key_event in una stringa
+	std::ostringstream key_event_str;
+	key_event_str << keyEvent;
+
+	// Imposta precisione numerica
+	// Scrivi i dati nel file CSV
+	file << std::fixed << std::setprecision(20) << keyEvent << ", " // key_event, senza notazione scientifica
+			<< nearUpdateEvent_key << ", " // near_event_key, senza notazione scientifica
+			<< db_everetval << ", " // operazione
+			<< std::fixed << std::setprecision(6)  // Formattiamo i numeri decimali (lat, lon, ele) con 6 decimali
+			<< lat << ", "
+			<< lon << ", "
+			<< ele << ", "
+			<< eveData.eventCauseCode << "\n";// Scrive l'evento di causa come intero
+
+	file1.close(); // Chiudi il file*/
 	return true;
 }
 
@@ -868,11 +1092,11 @@ bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 				if(m_recvCPMmap[fromStationID].find(asn1cpp::getField(PO_seq->objectId,long)) == m_recvCPMmap[fromStationID].end()){
 					// First time we have received this object from this vehicle
 					//If PO id is already in local copy of LDM
-					if(m_db_ptr->lookup(asn1cpp::getField(PO_seq->objectId,long),PO_ret_data) == ldmmap::LDMMap::LDMMAP_OK)
+					if(m_db_ptr->lookupVehicle(asn1cpp::getField(PO_seq->objectId,long),PO_ret_data) == ldmmap::LDMMap::LDMMAP_OK)
 					{
 						// We need a new ID for object
 						std::set<uint64_t> IDs;
-						m_db_ptr->getAllIDs (IDs);
+						m_db_ptr->getAllIDsVehicles (IDs);
 						int newID = 1;
 						for (int num : IDs) {
 							if (num == newID) {
@@ -913,7 +1137,7 @@ bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	            if(m_opts_ptr->ageCheck_enabled == true && gn_timestamp != UINT64_MAX) {
 	                ldmmap::LDMMap::returnedVehicleData_t retveh;
 
-	                if(m_db_ptr->lookup(PO_data.stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
+	                if(m_db_ptr->lookupVehicle(PO_data.stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
 	                    /* According to the standard: GNTimestamp = (TAI timestamp since 2004-01-01 00:00:00) % 4294967296
 	                    // Due to the modulo operation, it is not enough to consider the difference between the received GNTimestamp and the one
 	                    // stored in the database, as this may cause issues when receiving data and the GNTimestamp values are cyclically reset
@@ -955,7 +1179,7 @@ bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	            if(m_logfile_name!="") {
 	                ldmmap::LDMMap::returnedVehicleData_t retveh;
 
-	                if(m_db_ptr->lookup(PO_data.stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
+	                if(m_db_ptr->lookupVehicle(PO_data.stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
 	                    l_inst_period=(get_timestamp_us()-retveh.vehData.timestamp_us)/1000.0;
 	                } else {
 	                    l_inst_period=-1.0;
@@ -1015,7 +1239,7 @@ bool AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	if(m_opts_ptr->ageCheck_enabled == true && gn_timestamp != UINT64_MAX){
 		ldmmap::LDMMap::returnedVehicleData_t retveh;
 
-		if(m_db_ptr->lookup(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
+		if(m_db_ptr->lookupVehicle(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
 			long long int gap = static_cast<long long int>(gn_timestamp)-static_cast<long long int>(retveh.vehData.gnTimestamp);
 
 			if((gn_timestamp>retveh.vehData.gnTimestamp && gap>300000) ||
@@ -1056,7 +1280,7 @@ bool AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	if(m_logfile_name!="") {
 		ldmmap::LDMMap::returnedVehicleData_t retveh;
 
-		if(m_db_ptr->lookup(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
+		if(m_db_ptr->lookupVehicle(stationID,retveh)==ldmmap::LDMMap::LDMMAP_OK) {
 			l_inst_period=(get_timestamp_us()-retveh.vehData.timestamp_us)/1000.0;
 		} else {
 			l_inst_period=-1.0;

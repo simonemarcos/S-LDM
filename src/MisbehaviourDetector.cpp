@@ -259,85 +259,92 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 		if (messageDeltaTime<0.1) {
 			MB_CODE|=MB_CODE_CONV(MB_BREACON_FREQ_INC);
 		}
-		
+
 		// ------- POSITION CHANGE SPEED CHECK -------
 
 		const double radiansFactor=M_PI/180;
 		const double dLat = (vehdata.lat - lastMessage.lat) * radiansFactor;
 		const double dLon = (vehdata.lon - lastMessage.lon) * radiansFactor;
 		const double earthRadius = 6371000; //in meters
-		double messagePositionDistance;
-		if (m_opts.useHaversineDistance) {
-			double a = pow(sin(dLat / 2), 2) + pow(sin(dLon / 2), 2) * cos(lastMessage.lat*radiansFactor) * cos(vehdata.lat*radiansFactor);
-			double c = 2 * asin(sqrt(a));
-			messagePositionDistance=earthRadius*c;
-		} else {
-			messagePositionDistance=earthRadius*sqrt(pow(dLat, 2) + pow(dLon*cos(lastMessage.lat*radiansFactor), 2));
-		}
-		const double messagePositionSpeed=messagePositionDistance/messageDeltaTime;
-		// Average speed needed to travel the "message distance" is implausible
-		if (messagePositionSpeed>maxSpeeds[vehdata.stationType]) {
-			MB_CODE|=MB_CODE_CONV(MB_POSITION_SPEED_IMP);
-		}
-		const double averageSpeed=(vehdata.speed_ms+lastMessage.speed_ms)/2.0;
-		// Calculated average speed doesn't match with average speed of the CAMs
-		if (messagePositionSpeed>averageSpeed*(1+m_opts.tolerance) || messagePositionSpeed<averageSpeed*(1-m_opts.tolerance)) {
-			MB_CODE|=MB_CODE_CONV(MB_POSITION_SPEED_INC);
+		double averageSpeed;
+		double messageHeadingYawRate;
+		if (vehdata.speed_ms!=ldmmap::e_DataUnavailableValue::speed && lastMessage.speed_ms!=ldmmap::e_DataUnavailableValue::speed) {
+			double messagePositionDistance;
+			if (m_opts.useHaversineDistance) {
+				double a = pow(sin(dLat / 2), 2) + pow(sin(dLon / 2), 2) * cos(lastMessage.lat*radiansFactor) * cos(vehdata.lat*radiansFactor);
+				double c = 2 * asin(sqrt(a));
+				messagePositionDistance=earthRadius*c;
+			} else {
+				messagePositionDistance=earthRadius*sqrt(pow(dLat, 2) + pow(dLon*cos(lastMessage.lat*radiansFactor), 2));
+			}
+			const double messagePositionSpeed=messagePositionDistance/messageDeltaTime;
+			// Average speed needed to travel the "message distance" is implausible
+			if (messagePositionSpeed>maxSpeeds[vehdata.stationType]) {
+				MB_CODE|=MB_CODE_CONV(MB_POSITION_SPEED_IMP);
+			}
+			averageSpeed=(vehdata.speed_ms+lastMessage.speed_ms)/2.0;
+			// Calculated average speed doesn't match with average speed of the CAMs
+			if (messagePositionSpeed>averageSpeed*(1+m_opts.tolerance) || messagePositionSpeed<averageSpeed*(1-m_opts.tolerance)) {
+				MB_CODE|=MB_CODE_CONV(MB_POSITION_SPEED_INC);
+			}
+
+			// ------- SPEED CHANGE ACCELERATION CHECK -------
+
+			const double messageSpeedAcceleration=(vehdata.speed_ms-lastMessage.speed_ms)/messageDeltaTime;
+			// Average acceleration needed to reach message speed is implausible
+			if (messageSpeedAcceleration>0) {
+				if (messageSpeedAcceleration>maxAccelerations[vehdata.stationType]) {
+					MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_IMP);
+				}
+			} else {
+				if (-messageSpeedAcceleration>maxBrakings[vehdata.stationType]) {
+					MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_IMP);
+				}
+			}
+			const double averageAcceleration=(vehdata.longitudinalAcceleration+lastMessage.longitudinalAcceleration)/2.0;
+			// Calculated average acceleration doesn't match with average acceleration of the CAMs
+			if (messageSpeedAcceleration>averageAcceleration*(1+m_opts.tolerance) || messageSpeedAcceleration<averageSpeed*(1-m_opts.tolerance)) {
+				MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_INC);
+			}
 		}
 
 		// ------- POSITION CHANGE HEADING CHECK -------
-
-		const double messageHeading=fmod((atan2(dLon,dLat)/radiansFactor)+360,360);
-		double averageHeading=(vehdata.heading+lastMessage.heading)/2.0;
-		// adjust for "left side" map heading
-		if (vehdata.heading>180 || lastMessage.heading>180) {
-			averageHeading+=180;
-		}
-		// Calculated average heading doesn't match with average heading of the CAMs
-		if (messageHeading>averageHeading*(1+m_opts.tolerance) || messageHeading<averageHeading*(1-m_opts.tolerance)) {
-			MB_CODE|=MB_CODE_CONV(MB_POSITION_HEADING_INC);
-		}
-
-		// ------- HEADING CHANGE YAW RATE CHECK -------
-
-		const double messageHeadingYawRate=vehdata.heading-lastMessage.heading/messageDeltaTime; // in degrees/second
-		if (messageHeadingYawRate>maxYawRates[vehdata.stationType]) {
-			MB_CODE|=MB_CODE_CONV(MB_HEADING_YAW_RATE_IMP);
-		}
-		const double averageYawRate=(vehdata.yawRate+lastMessage.yawRate)/2.0;
-		if (messageHeadingYawRate>averageYawRate*(1+m_opts.tolerance) || messageHeadingYawRate<averageYawRate*(1-m_opts.tolerance)) {
-			MB_CODE|=MB_CODE_CONV(MB_HEADING_YAW_RATE_INC);
-		}
-
-		// ------- SPEED CHANGE ACCELERATION CHECK -------
-
-		const double messageSpeedAcceleration=(vehdata.speed_ms-lastMessage.speed_ms)/messageDeltaTime;
-		// Average acceleration needed to reach message speed is implausible
-		if (messageSpeedAcceleration>0) {
-			if (messageSpeedAcceleration>maxAccelerations[vehdata.stationType]) {
-				MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_IMP);
+		if (vehdata.heading!=ldmmap::e_DataUnavailableValue::heading && lastMessage.heading!=ldmmap::e_DataUnavailableValue::heading) {
+			const double messageHeading=fmod((atan2(dLon,dLat)/radiansFactor)+360,360);
+			double averageHeading=(vehdata.heading+lastMessage.heading)/2.0;
+			// adjust for "left side" map heading
+			if (vehdata.heading>180 || lastMessage.heading>180) {
+				averageHeading+=180;
 			}
-		} else {
-			if (-messageSpeedAcceleration>maxBrakings[vehdata.stationType]) {
-				MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_IMP);
+			// Calculated average heading doesn't match with average heading of the CAMs
+			if (messageHeading>averageHeading*(1+m_opts.tolerance) || messageHeading<averageHeading*(1-m_opts.tolerance)) {
+				MB_CODE|=MB_CODE_CONV(MB_POSITION_HEADING_INC);
 			}
-		}
-		const double averageAcceleration=(vehdata.longitudinalAcceleration+lastMessage.longitudinalAcceleration)/2.0;
-		// Calculated average acceleration doesn't match with average acceleration of the CAMs
-		if (messageSpeedAcceleration>averageAcceleration*(1+m_opts.tolerance) || messageSpeedAcceleration<averageSpeed*(1-m_opts.tolerance)) {
-			MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_INC);
-		}
 
-		// ------- POSITION + HEADING DRIVE DIRECTION CHECK -------
+			// ------- HEADING CHANGE YAW RATE CHECK -------
 
-		// considering this as driving forward
-		if (averageHeading-90<messageHeading<averageHeading+90) {
-			if (lastMessage.driveDirection==DriveDirection_backward) {
-				MB_CODE|=MB_CODE_CONV(MB_POS_AND_HEADING_DIRECTION_INC);
+			if (vehdata.yawRate!=ldmmap::e_DataUnavailableValue::yawRate && lastMessage.yawRate!=ldmmap::e_DataUnavailableValue::yawRate) {
+				messageHeadingYawRate=vehdata.heading-lastMessage.heading/messageDeltaTime; // in degrees/second
+				if (messageHeadingYawRate>maxYawRates[vehdata.stationType]) {
+					MB_CODE|=MB_CODE_CONV(MB_HEADING_YAW_RATE_IMP);
+				}
+				const double averageYawRate=(vehdata.yawRate+lastMessage.yawRate)/2.0;
+				if (messageHeadingYawRate>averageYawRate*(1+m_opts.tolerance) || messageHeadingYawRate<averageYawRate*(1-m_opts.tolerance)) {
+					MB_CODE|=MB_CODE_CONV(MB_HEADING_YAW_RATE_INC);
+				}
 			}
-		} else {
-			if (lastMessage.driveDirection==DriveDirection_forward) {
-				MB_CODE|=MB_CODE_CONV(MB_POS_AND_HEADING_DIRECTION_INC);
+
+			// ------- POSITION + HEADING DRIVE DIRECTION CHECK -------
+
+			// considering this as driving forward
+			if (averageHeading-90<messageHeading<averageHeading+90) {
+				if (lastMessage.driveDirection==DriveDirection_backward) {
+					MB_CODE|=MB_CODE_CONV(MB_POS_AND_HEADING_DIRECTION_INC);
+				}
+			} else {
+				if (lastMessage.driveDirection==DriveDirection_forward) {
+					MB_CODE|=MB_CODE_CONV(MB_POS_AND_HEADING_DIRECTION_INC);
+				}
 			}
 		}
 
@@ -353,61 +360,73 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 
 		// ------- ACCELERATION CHECK -------
 
-		const double messageAccelerationChange=vehdata.longitudinalAcceleration-lastMessage.longitudinalAcceleration;
-		if (messageAccelerationChange>maxJerks[vehdata.stationType] || -messageAccelerationChange<maxJerks[vehdata.stationType]) {
-			MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_INC);
+		if (vehdata.longitudinalAcceleration!=ldmmap::e_DataUnavailableValue::longitudinalAcceleration && lastMessage.longitudinalAcceleration!=ldmmap::e_DataUnavailableValue::longitudinalAcceleration) {
+			const double messageAccelerationChange=vehdata.longitudinalAcceleration-lastMessage.longitudinalAcceleration;
+			if (messageAccelerationChange>maxJerks[vehdata.stationType] || -messageAccelerationChange<maxJerks[vehdata.stationType]) {
+				MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_INC);
+			}
 		}
 		
-		const double curvatureRatio=vehdata.curvature/lastMessage.curvature;
-		const double speedRatio=vehdata.speed_ms/lastMessage.speed_ms;
-		const double yawRateRatio=vehdata.yawRate/lastMessage.yawRate;
-
-		const double dCurvature=vehdata.curvature-lastMessage.curvature;
-		// if approximatively constant (using tolerance for now but should be a separate parameter)
-		if (abs(dCurvature)<lastMessage.curvature*(m_opts.tolerance/10)) {
-			
-			// ------- HEADING CHANGE SPEED CHECK -------
-
-			const double averageHeadingYawRate=averageSpeed*(vehdata.curvature+lastMessage.curvature)/2.0;
-			if (messageHeadingYawRate>averageHeadingYawRate*(1+m_opts.tolerance) || messageHeadingYawRate>averageHeadingYawRate*(1-m_opts.tolerance)) {
-				MB_CODE|=MB_CODE_CONV(MB_HEADING_SPEED_INC);	
-			}
-			
-			// ------- YAW RATE CHANGE SPEED CHECK -------
-
-			if (yawRateRatio>speedRatio*(1+m_opts.tolerance) || yawRateRatio<speedRatio*(1-m_opts.tolerance)) {
-				MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_SPEED_INC);
-			}
+		double curvatureRatio=ldmmap::e_DataUnavailableValue::curvature;
+		if (lastMessage.curvature!=0 && lastMessage.curvature!=ldmmap::e_DataUnavailableValue::curvature && vehdata.curvature!=ldmmap::e_DataUnavailableValue::curvature) {
+			curvatureRatio=vehdata.curvature/lastMessage.curvature;
+		}
+		double speedRatio=ldmmap::e_DataUnavailableValue::speed;
+		if (lastMessage.speed_ms!=0 && lastMessage.speed_ms!=ldmmap::e_DataUnavailableValue::speed && vehdata.speed_ms!=ldmmap::e_DataUnavailableValue::speed) {
+			speedRatio=vehdata.speed_ms/lastMessage.speed_ms;
+		}
+		double yawRateRatio=ldmmap::e_DataUnavailableValue::yawRate;
+		if (lastMessage.yawRate!=0 && lastMessage.yawRate!=ldmmap::e_DataUnavailableValue::yawRate && vehdata.yawRate!=ldmmap::e_DataUnavailableValue::yawRate) {
+			yawRateRatio=vehdata.yawRate/lastMessage.yawRate;
 		}
 
-		const double dSpeed=vehdata.speed_ms-lastMessage.speed_ms;
-		if (abs(dSpeed)<lastMessage.speed_ms*(m_opts.tolerance/10)) {
-			// pretty much the same checks
+		if (curvatureRatio!=ldmmap::e_DataUnavailableValue::curvature && speedRatio!=ldmmap::e_DataUnavailableValue::speed && yawRateRatio!=ldmmap::e_DataUnavailableValue::yawRate) {
+			const double dCurvature=vehdata.curvature-lastMessage.curvature;
+			// if approximatively constant (using tolerance for now but should be a separate parameter)
+			if (abs(dCurvature)<lastMessage.curvature*(m_opts.tolerance/10)) {
+				
+				// ------- HEADING CHANGE SPEED CHECK -------
 
-			// ------- CURVATURE CHANGE YAW RATE CHECK -------
+				const double averageHeadingYawRate=averageSpeed*(vehdata.curvature+lastMessage.curvature)/2.0;
+				if (messageHeadingYawRate>averageHeadingYawRate*(1+m_opts.tolerance) || messageHeadingYawRate>averageHeadingYawRate*(1-m_opts.tolerance)) {
+					MB_CODE|=MB_CODE_CONV(MB_HEADING_SPEED_INC);	
+				}
+				
+				// ------- YAW RATE CHANGE SPEED CHECK -------
 
-			if (curvatureRatio>yawRateRatio*(1+m_opts.tolerance) || curvatureRatio<yawRateRatio*(1-m_opts.tolerance)) {
-				MB_CODE|=MB_CODE_CONV(MB_CURVATURE_YAW_RATE_INC);
+				if (yawRateRatio>speedRatio*(1+m_opts.tolerance) || yawRateRatio<speedRatio*(1-m_opts.tolerance)) {
+					MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_SPEED_INC);
+				}
 			}
-	
-			// ------- YAW RATE CHANGE CURVATURE CHECK -------
 
-			if (yawRateRatio>curvatureRatio*(1+m_opts.tolerance) || yawRateRatio<curvatureRatio*(1-m_opts.tolerance)) {
-				MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_CURVATURE_INC);
-			}
+			const double dSpeed=vehdata.speed_ms-lastMessage.speed_ms;
+			if (abs(dSpeed)<lastMessage.speed_ms*(m_opts.tolerance/10)) {
+				// pretty much the same checks
 
-		}
+				// ------- CURVATURE CHANGE YAW RATE CHECK -------
+
+				if (curvatureRatio>yawRateRatio*(1+m_opts.tolerance) || curvatureRatio<yawRateRatio*(1-m_opts.tolerance)) {
+					MB_CODE|=MB_CODE_CONV(MB_CURVATURE_YAW_RATE_INC);
+				}
 		
-		// ------- CURVATURE CHANGE SPEED CHECK -------
+				// ------- YAW RATE CHANGE CURVATURE CHECK -------
 
-		const double dYawRate=vehdata.yawRate-lastMessage.yawRate;
-		if (abs(dYawRate)<lastMessage.yawRate*(m_opts.tolerance/10)) {
-			if (curvatureRatio>speedRatio*(1+m_opts.tolerance) || curvatureRatio<speedRatio*(1-m_opts.tolerance)) {
-				MB_CODE|=MB_CODE_CONV(MB_CURVATURE_SPEED_INC);
+				if (yawRateRatio>curvatureRatio*(1+m_opts.tolerance) || yawRateRatio<curvatureRatio*(1-m_opts.tolerance)) {
+					MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_CURVATURE_INC);
+				}
+
+			}
+			
+			// ------- CURVATURE CHANGE SPEED CHECK -------
+
+			const double dYawRate=vehdata.yawRate-lastMessage.yawRate;
+			if (abs(dYawRate)<lastMessage.yawRate*(m_opts.tolerance/10)) {
+				if (curvatureRatio>speedRatio*(1+m_opts.tolerance) || curvatureRatio<speedRatio*(1-m_opts.tolerance)) {
+					MB_CODE|=MB_CODE_CONV(MB_CURVATURE_SPEED_INC);
+				}
 			}
 		}
-
 	}
-	
+
 	return MB_CODE;
 }

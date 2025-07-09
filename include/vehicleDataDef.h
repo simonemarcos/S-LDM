@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <vector>
 #include <shared_mutex>
+#include "optionalDataItem.h"
 
 #define vehicleDataVector_t(name) std::vector<ldmmap::vehicleData_t> name;
 
@@ -14,23 +15,6 @@
 #define LDM_HEADING_UNAVAILABLE 3601.0
 
 namespace ldmmap {
-	// Class to store optional data
-	// If the data is not available, m_available is 'false' and no actual data is stored (getData() does not return any meaningful data)
-	// If the data is available (isAvailable() returns 'true'), then the actual data can be retrieved with getData()
-	template <class T> class OptionalDataItem
-	{
-		private:
-			bool m_available;
-			T m_dataitem;
-
-		public:
-			OptionalDataItem(T data): m_dataitem(data) {m_available=true;}
-			OptionalDataItem(bool availability) {m_available=availability;}
-			OptionalDataItem() {m_available=false;}
-			T getData() {return m_dataitem;}
-			bool isAvailable() {return m_available;}
-			T setData(T data) {m_dataitem=data; m_available=true;}
-	};
 
 	typedef enum StationTypeLDM {
 		StationType_LDM_unknown = 0,
@@ -68,6 +52,7 @@ namespace ldmmap {
 		curvature=INT16_MAX,
 		driveDirection=UINT8_MAX,
 		yawRate=INT16_MAX,
+		heading=UINT64_MAX,
 	} e_DataUnavailableValue;
 
 	// This structure contains all the data stored in the database for each vehicle (except for the PHPoints)

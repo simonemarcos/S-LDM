@@ -22,11 +22,8 @@
 #include "triggerManager.h"
 #include "MisbehaviourDetector.h"
 
-#include "security.h"
-
 class AMQPClient : public proton::messaging_handler {
 	private:
-		Security m_security;
 		std::string conn_url_;
 		std::string addr_;
 		double max_latitude;
@@ -40,6 +37,7 @@ class AMQPClient : public proton::messaging_handler {
 		areaFilter m_areaFilter;
 		struct options *m_opts_ptr;
 		ldmmap::LDMMap *m_db_ptr;
+		CertificateStore *m_certStore_ptr;
 		std::map<uint64_t, std::map<uint64_t,uint64_t>> m_recvCPMmap;  //! Structure mapping, for each CV that we have received a CPM from, the CPM's PO ids with the ego LDM's PO ids
 		MisbehaviourDetector *m_MBDetector_ptr;
 		bool m_MBDetection_enabled;
@@ -57,6 +55,7 @@ class AMQPClient : public proton::messaging_handler {
 		bool m_allow_insecure;
 		long m_idle_timeout_ms;
 
+		std::string m_eventclient_id;
 		std::string m_client_id;
 
 		std::string m_quadKey_filter="";
@@ -64,6 +63,7 @@ class AMQPClient : public proton::messaging_handler {
 		std::atomic<proton::container *> m_cont;
 
 		bool decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,ldmmap::vehicleData_t &vehdata);
+		bool decodeDENM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,ldmmap::vehicleData_t &vehdata);
 		bool decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id, std::vector<ldmmap::vehicleData_t> &PO_vec);
 		bool decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::message &msg, uint64_t on_msg_timestamp_us, uint64_t main_bf, std::string m_client_id,ldmmap::vehicleData_t &vehdata);
 
@@ -97,6 +97,10 @@ class AMQPClient : public proton::messaging_handler {
 			m_cont=nullptr;
 			m_idle_timeout_ms=-1;
 			m_MBDetection_enabled=m_opts_ptr->MBDetector_enabled;
+		}
+
+		void setCertificateStore(CertificateStore *certStore_ptr) {
+			m_certStore_ptr=certStore_ptr;
 		}
 
 		void setMisbehaviourDetector(MisbehaviourDetector *MBDetector_ptr) {

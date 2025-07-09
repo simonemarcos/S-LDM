@@ -40,10 +40,11 @@ namespace etsiDecoder {
     }
 
     gnError_e
-    GeoNet::decodeGN(unsigned char *packet, GNDataIndication_t* dataIndication, Security::Security_error_t &sec_retval)
+    GeoNet::decodeGN(unsigned char *packet, GNDataIndication_t* dataIndication, Security::Security_error_t &sec_retval, storedCertificate_t &certificateData)
     {
         basicHeader basicH;
         commonHeader commonH;
+        gnError_e retval=GN_OK;
 
         dataIndication->data = packet;
 
@@ -70,11 +71,10 @@ namespace etsiDecoder {
         if(basicH.GetNextHeader()==2) //a) if NH=0 or NH=1 proceed with common header procesing
         {
             //Secured packet
-            bool isCertificate;
-            sec_retval=m_security.extractSecurePacket (*dataIndication, isCertificate);
-            if (sec_retval != Security::SECURITY_OK) {
+            sec_retval=m_security.extractSecurePacket (*dataIndication, certificateData);
+            if (sec_retval == Security::SECURITY_VERIFICATION_FAILED) {
                 std::cout << "[INFO] [Decoder] Security verification failed" << std::endl;
-                return GN_SECURED_ERROR;
+                retval=GN_SECURED_ERROR;
             } else {
                 std::cout << "[INFO] [Decoder] Security verification successful" << std::endl;
             }
@@ -117,7 +117,7 @@ namespace etsiDecoder {
                 std::cerr << "[ERROR] [Decoder] GeoNet packet not supported. GNType: " << static_cast<unsigned int>(dataIndication->GNType) << std::endl;
                 return GN_TYPE_ERROR;
         }
-        return GN_OK;
+        return retval;
     }
 
 

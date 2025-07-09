@@ -37,7 +37,7 @@ std::condition_variable synccv;
 std::unordered_map<int,AMQPClient*> amqpclimap;
 std::mutex amqpclimutex;
 
-void AMQPclient_t(ldmmap::LDMMap *db_ptr,options_t *opts_ptr,std::string logfile_name,std::string clientID,unsigned int clientIndex,indicatorTriggerManager *itm_ptr,std::string quadKey_filter,AMQPClient *main_amqp_ptr,MisbehaviourDetector *mbd_ptr) {
+void AMQPclient_t(ldmmap::LDMMap *db_ptr,options_t *opts_ptr,std::string logfile_name,std::string clientID,unsigned int clientIndex,indicatorTriggerManager *itm_ptr,std::string quadKey_filter,AMQPClient *main_amqp_ptr,MisbehaviourDetector *mbd_ptr,CertificateStore *certStore_ptr) {
 	if(clientIndex >= MAX_ADDITIONAL_AMQP_CLIENTS-1) {
 		fprintf(stderr,"[FATAL ERROR] Error: there is a bug in the code, which attemps to spawn too many AMQP clients.\nPlease report this bug to the developers.\n");
 		fprintf(stderr,"Bug details: client id: %s - client index: %u - max supported clients: %u\n",clientID.c_str(),clientIndex,MAX_ADDITIONAL_AMQP_CLIENTS-1);
@@ -65,6 +65,9 @@ void AMQPclient_t(ldmmap::LDMMap *db_ptr,options_t *opts_ptr,std::string logfile
 
 			// Set Misbehaviour Detector in any case, if disabled messages will just pass through
 			recvClient.setMisbehaviourDetector(mbd_ptr);
+
+			// Pass the certificate store pointer
+			recvClient.setCertificateStore(certStore_ptr);
 
 			// Set username, if specified
 			if(options_string_len(opts_ptr->amqp_broker_x[clientIndex].amqp_username)>0) {
@@ -126,6 +129,12 @@ void clearVisualizerObject(uint64_t id,void *vizObjVoidPtr) {
 	vizObjPtr->sendObjectClean(std::to_string(id));
 }
 
+void clearEventVisualizerObject(uint64_t id,void *vizObjVoidPtr) {
+	vehicleVisualizer *vizObjPtr = static_cast<vehicleVisualizer *>(vizObjVoidPtr);
+
+	vizObjPtr->sendEventObjectClean(id);
+}
+
 void *DBcleaner_callback(void *arg) {
 	// Get the pointer to the database
 	ldmmap::LDMMap *db_ptr = static_cast<ldmmap::LDMMap *>(arg);
@@ -149,8 +158,10 @@ void *DBcleaner_callback(void *arg) {
 	while(terminatorFlag == false && tmr.waitForExpiration()==true) {
 			// ---- These operations will be performed periodically ----
 
-			db_ptr->deleteOlderThanAndExecute(DB_DELETE_OLDER_THAN_SECONDS*1e3,clearVisualizerObject,static_cast<void *>(globVehVizPtr));
+			db_ptr->deleteVehicleOlderThanAndExecute(DB_DELETE_OLDER_THAN_SECONDS*1e3,clearVisualizerObject,static_cast<void *>(globVehVizPtr));
 
+			// Delete events older than the specified validity duration
+			db_ptr->deleteEventOlderThanAndExecute(clearEventVisualizerObject,static_cast<void *>(globVehVizPtr));
 			// --------
 	}
 
@@ -165,6 +176,13 @@ void updateVisualizer(ldmmap::vehicleData_t vehdata,void *vizObjVoidPtr) {
 	vehicleVisualizer *vizObjPtr = static_cast<vehicleVisualizer *>(vizObjVoidPtr);
 
 	vizObjPtr->sendObjectUpdate(std::to_string(vehdata.stationID),vehdata.lat,vehdata.lon,static_cast<int>(vehdata.stationType),vehdata.heading);
+}
+
+void updateEventVisualizer(ldmmap::eventData_t eveData,uint64_t key, void *vizObjVoidPtr) {
+	vehicleVisualizer *vizObjPtr = static_cast<vehicleVisualizer *>(vizObjVoidPtr);
+
+		vizObjPtr->sendEventObjectUpdate(key, eveData.eventLatitude, eveData.eventLongitude, eveData.eventElevation, eveData.eventCauseCode);
+		//printf("EVENT_KEY (Visualizer): %lu\n", key);
 }
 
 void *VehVizUpdater_callback(void *arg) {
@@ -208,7 +226,7 @@ void *VehVizUpdater_callback(void *arg) {
 
                         // ---- These operations will be performed periodically ----
 
-                        db_ptr->executeOnAllContents(&updateVisualizer, static_cast<void *>(&vehicleVisObj));
+                        db_ptr->executeOnAllVehicleContents(&updateVisualizer, static_cast<void *>(&vehicleVisObj));
 
 			// --------
 	}
@@ -328,7 +346,8 @@ int main(int argc, char **argv) {
 	etsiDecoder::etsiDecodedData_t decodedData;
 
 	Security::Security_error_t sec_retval;
-	if(decodeFrontend.decodeEtsi((uint8_t *)&denm2_bytes[0], 190, decodedData, sec_retval)!=ETSI_DECODER_OK) {
+	storedCertificate_t certificateData;
+	if(decodeFrontend.decodeEtsi((uint8_t *)&denm2_bytes[0], 190, decodedData, sec_retval,certificateData)!=ETSI_DECODER_OK) {
 		std::cerr << "Error! Cannot decode ETSI packet!" << std::endl;
 	}
 
@@ -361,38 +380,38 @@ int main(int argc, char **argv) {
 	ldmmap::LDMMap dbtest;
 	ldmmap::vehicleData_t veh1 = {.stationID=188321312, .lat=45.562149, .lon=8.055311, .elevation=440, .heading=120, .speed_ms=17, .gnTimestamp=34235235235, .timestamp_us=0};
 	veh1.timestamp_us = get_timestamp_us(); // now
-	dbtest.insert(veh1);
+	dbtest.insertVehicle(veh1);
 	std::printf("Test vehicle 1 inserted @ %lu\n",veh1.timestamp_us);
 
 	ldmmap::vehicleData_t veh2 = {.stationID=288321312, .lat=45.512149, .lon=8.355311, .elevation=440, .heading=100, .speed_ms=17, .gnTimestamp=34235235235, .timestamp_us=0};
 	veh2.timestamp_us = get_timestamp_us()-2*1e6; // 2 seconds ago
-	dbtest.insert(veh2);
+	dbtest.insertVehicle(veh2);
 	std::printf("Test vehicle 2 inserted @ %lu\n",veh2.timestamp_us);
 
 	ldmmap::vehicleData_t veh3 = {.stationID=388321312, .lat=45.592149, .lon=8.855311, .elevation=440, .heading=80, .speed_ms=17, .gnTimestamp=34235235235, .timestamp_us=0};
 	veh3.timestamp_us = get_timestamp_us()-5*1e6; // 5 seconds ago
-	dbtest.insert(veh3);
+	dbtest.insertVehicle(veh3);
 	std::printf("Test vehicle 3 inserted @ %lu\n",veh3.timestamp_us);
 
 	ldmmap::vehicleData_t veh4 = {.stationID=488321312, .lat=45.362149, .lon=8.755311, .elevation=440, .heading=10, .speed_ms=17, .gnTimestamp=34235235235, .timestamp_us=0};
 	veh4.timestamp_us = get_timestamp_us()-7*1e6; // 7 seconds ago
-	dbtest.insert(veh4);
+	dbtest.insertVehicle(veh4);
 	std::printf("Test vehicle 4 inserted @ %lu\n",veh4.timestamp_us);
 
 	// Print all the contents of the test DB (should be equal to 4)
-	dbtest.printAllContents("Before deletion");
+	dbtest.printAllVehicleContents("Before deletion");
 
 	// Print the size of the test DB
-	std::cout << "Number of elements stored in the LDMMap DB: " << dbtest.getCardinality() << std::endl;
+	std::cout << "Number of elements stored in the LDMMap DB: " << dbtest.getVehicleCardinality() << std::endl;
 
 	// Delete now all the vehicles older than 5.5 seconds
-	dbtest.deleteOlderThan(5500); // Only 188321312, 288321312 and 388321312 should remain in the DB
+	dbtest.deleteVehicleOlderThan(5500); // Only 188321312, 288321312 and 388321312 should remain in the DB
 
 	// Now print all the contents of the DB again
-	dbtest.printAllContents("After deletion");
+	dbtest.printAllVehicleContents("After deletion");
 
 	// Print the size of the test DB again (should be equal to 3)
-	std::cout << "Number of elements stored in the LDMMap DB: " << dbtest.getCardinality() << std::endl;
+	std::cout << "Number of elements stored in the LDMMap DB: " << dbtest.getVehicleCardinality() << std::endl;
 
 	dbtest.setCentralLatLon(45.562149,8.055311); // Set a central lat lon for testing the visualizer thread
 
@@ -494,6 +513,9 @@ int main(int argc, char **argv) {
 	// Options passed just for future uses, may get removed
 	MisbehaviourDetector mbd(logfile_name);
 	
+	// Create a CertificateStore object (the same object will be then accessed by all the AMQP clients, when using more than one client)
+	CertificateStore certStore;
+
 	// -*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*
 
 	// Create the main AMQP client object
@@ -519,7 +541,7 @@ int main(int argc, char **argv) {
 
 		for(unsigned int i=0;i<sldm_opts.num_amqp_x_enabled;i++) {
 			amqp_x_threads.emplace_back(AMQPclient_t,db_ptr,&sldm_opts,(logfile_name == "stdout" ? "stdout" : logfile_name + std::to_string(i+2)),
-				std::to_string(i+2),i,&itm,filter_str,&mainRecvClient,&mbd);
+				std::to_string(i+2),i,&itm,filter_str,&mainRecvClient,&mbd,&certStore);
 		}
 	}
 
@@ -542,6 +564,9 @@ int main(int argc, char **argv) {
 
 			// Activate Misbehaviour Detector is enabled
 			mainRecvClient.setMisbehaviourDetector(&mbd);
+
+			// Pass the certificate store pointer to the client
+			mainRecvClient.setCertificateStore(&certStore);
 
 			// Set username, if specified
 			if(options_string_len(sldm_opts.amqp_broker_one.amqp_username)>0) {

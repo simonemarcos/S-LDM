@@ -1,0 +1,3 @@
+TotalMessageProcessingTimeDENM [us],DatabaseUpdateDENM [us],LookupAndUpdateEvent_Time [us],InsertEvent_Time [us],DecodedMessageProcessingTime [us]
+140.607,38.073,16.671,1.523,1.75162e+15
+419.989,271.205,216.171,0,1.75162e+15

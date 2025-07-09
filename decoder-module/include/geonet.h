@@ -25,7 +25,7 @@ namespace etsiDecoder
 
         ~GeoNet();
 
-        gnError_e decodeGN(unsigned char * packet, GNDataIndication_t* dataIndication, Security::Security_error_t &sec_retval);
+        gnError_e decodeGN(unsigned char * packet, GNDataIndication_t* dataIndication, Security::Security_error_t &sec_retval, storedCertificate_t &certificateData);
 
     private:
         GNDataIndication_t* processSHB(GNDataIndication_t* dataIndication);

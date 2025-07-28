@@ -573,7 +573,7 @@ Security::createSecurePacket (etsiDecoder::GNDataRequest_t dataRequest, bool &is
 
 Security::Security_error_t
 Security::extractSecurePacket (etsiDecoder::GNDataIndication_t &dataIndication, storedCertificate_t &certificateData) {
-    Security_error_t retval=SECURITY_OK;
+    Security_error_t retval=SECURITY_VERIFICATION_FAILED;
     bool isCertificate;
     asn1cpp::Seq<Ieee1609Dot2Data> ieeeData_decoded;
     std::vector<unsigned char> bufferCopy(dataIndication.data, dataIndication.data + dataIndication.lenght);
@@ -586,7 +586,7 @@ Security::extractSecurePacket (etsiDecoder::GNDataIndication_t &dataIndication, 
     // Secured DENM bad decode protection
     if (ieeeData_decoded.operator bool()==false) {
         std::cout <<"[WARNING] BAD DECODE - NO DECODED DATA" <<std::endl;
-        return SECURITY_VERIFICATION_FAILED;
+        return retval;
     }
 
     secureDataPacket.protocol_version = asn1cpp::getField (ieeeData_decoded->protocolVersion, long);
@@ -824,6 +824,7 @@ Security::extractSecurePacket (etsiDecoder::GNDataIndication_t &dataIndication, 
                 bool signValid = false;
                 for (auto const &item: m_receivedCertificates) {
                     if (signatureVerification(tbs_hex, item.second.second,secureDataPacket.content.signData.signature,item.second.first)) {
+                        retval=SECURITY_VALID_CERTIFICATE;
                         signValid = true;
                         break;
                     }

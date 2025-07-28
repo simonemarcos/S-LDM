@@ -13,6 +13,20 @@ void CertificateStore::insert_or_assign(std::string digest, storedCertificate_t 
     }
 }
 
+void CertificateStore::deleteOlderThan(double time_milliseconds) {
+    uint64_t now = get_timestamp_us();
+    int counter=0;
+    std::lock_guard<std::shared_mutex> lk(m_storeMutex);
+    for (auto it=m_certificateStore.cbegin();it!=m_certificateStore.cend();) {
+        if(((double)(now-it->second.msg_timestamp))/1000.0 > time_milliseconds) {
+            it=m_certificateStore.erase(it);
+            counter++;
+        } else {
+            ++it;
+        }
+    }
+}
+
 e_DigestValid_retval CertificateStore::isValid(std::string digest) {
     std::shared_lock<std::shared_mutex> lk(m_storeMutex);
     if (m_certificateStore.find(digest)==m_certificateStore.end()) {
@@ -24,26 +38,9 @@ e_DigestValid_retval CertificateStore::isValid(std::string digest) {
     return DIGEST_OK;
 }
 
-//std::vector<osmium::Way> ways;
-//class TestHandler : public osmium::handler::Handler {
-//public:
-//    static void way(const osmium::Way& way) {
-//        std::cout <<"Count: " <<ways.size() <<std::endl;
-//        ways.emplace_back(way);
-//    }
-//};
-
-void CertificateStore::test() {
-    try {
-        //const osmium::io::File input_file{"map.osm"};
-        //osmium::io::Reader reader{input_file};
-
-        //TestHandler handler;
-
-        //osmium::apply(reader,handler);
-
-        //reader.close();
-    } catch(const std::exception &e) {
-        std::cerr <<e.what() <<std::endl;
+void CertificateStore::printAll() {
+    std::cout <<"\n\nFull digest Store:\n";
+    for (auto p:m_certificateStore) {
+        std::cout <<"Digest: " <<p.first <<" Timestamp: " <<p.second.msg_timestamp <<std::endl;
     }
 }

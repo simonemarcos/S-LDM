@@ -18,6 +18,8 @@ const GREEN_CIRCLE_ICO_IDX = 2;
 const DETECTED_CAR_ICO_IDX = 3;
 const DETECTED_PEDESTRIAN_ICO_IDX = 4;
 const DETECTED_TRUCK_ICO_IDX = 5;
+const ICY_ROAD_ICO_IDX = 6;
+const GENERIC_DANGEROUS_SIGN_IDX = 7;
 
 // Start socket.io()
 const socket = io();
@@ -26,8 +28,10 @@ var map_rx = false;
 
 // Markers array
 var markers = [];
+var eventMarkers = new Map();
 // Markers icon array ('0' for carIcon, i.e. CAR_ICO_IDX, '1' for circleIcon, i.e. CIRCLE_ICO_IDX)
 var markersicons = [];
+var eventMarkersIcons = new Map();
 
 // Map reference variable
 var leafletmap = null;
@@ -93,6 +97,26 @@ var greenCircleIcon = L.icon({
 	iconAnchor:   [icon_length_circle_green/(icon_scale_factor*2), icon_height_circle_green/(icon_scale_factor*2)], // point of the icon which will correspond to marker's location
 	popupAnchor:  [0, 0] // point from which the popup should open relative to the iconAnchor
 });
+
+//Create a new icon for the "event" markers
+var icon_length_icyroad = 512;
+var icon_height_icyroad = 512;
+var icon_height_dangerousIcon = 1275;
+var icon_length_dangerousIcon = 1506;
+
+var detectedIcyRoadIcon = L.icon({
+	iconUrl: './img/icy_road.png',
+	iconSize: 	[icon_length_icyroad/icon_scale_factor, icon_height_icyroad/icon_scale_factor],
+	iconAnchor: [icon_length_icyroad/(icon_scale_factor*2), icon_height_icyroad/(icon_scale_factor*2)], // point of the icon which will correspond to marker's location
+	popupAnchor: [0, 0] // point from which the popup should open relative to the iconAnchor
+});
+
+var genericDangerousIcon = L.icon({
+	iconUrl: './img/dangerous_sign.png',
+	iconSize: 	[icon_length_dangerousIcon/icon_scale_factor, icon_height_dangerousIcon/icon_scale_factor],
+	iconAnchor: [icon_length_dangerousIcon/(icon_scale_factor*2), icon_height_dangerousIcon/(icon_scale_factor*2)], // point of the icon which will correspond to marker's location
+	popupAnchor: [0, 0] // point from which the popup should open relative to the iconAnchor
+})
 
 
 // Receive the first message from the server
@@ -161,6 +185,69 @@ socket.on('message', (msg) => {
 					update_marker(leafletmap,msg_fields[1],parseFloat(msg_fields[2]),parseFloat(msg_fields[3]),parseInt(msg_fields[4]),parseFloat(msg_fields[5]));
 				}
 				break;
+				
+			case 'event':
+				if(msg_fields.length !==6){
+					console.error("VehicleVisualizer: Error: received a corrupted eventObject update message from the server.");
+				} else {
+					update_EventMarker(leafletmap,msg_fields[1],parseFloat(msg_fields[2]),parseFloat(msg_fields[3]),parseFloat(msg_fields[4]),parseInt(msg_fields[5]));
+				}
+				break;
+
+			case 'objEventClean':
+				if(msg_fields.length !== 2){
+					console.error("VehicleVisualizer: Error: received a corrupted event clean message from the server.");
+				} else {
+					//console.log("Inside the else event clean"); // For debugging purposes
+					let idEvent =  msg_fields[1];
+
+					/*
+					for (let key of eventMarkers.keys()) {
+						console.log(`Comparing: '${idEvent}' (HEX: ${toHex(idEvent)}) === '${key}' (HEX: ${toHex(key)})`);
+					}
+					*/
+
+					//idEvent = idEvent.trim();  // Rimuove spazi prima e dopo
+					//idEvent = idEvent.normalize();  // Normalizza caratteri Unicode (se presenti)
+					idEvent = idEvent.replace(/\0/g, "");
+
+					for (let key of eventMarkers.keys()) {
+						let cleanedKey = key.trim().normalize();
+						if (idEvent === cleanedKey) {
+							console.log("✅ Match trovato!");
+						} //else {
+							//console.log(`❌ Nessun match: '${idEvent}' !== '${cleanedKey}'`);
+						//}
+					}
+
+					/*
+					for (let key of eventMarkers.keys()) {
+						console.log(`Tipo chiave: ${typeof key}, Valore: '${key}'`);
+					}
+					*/
+					//console.log(idEvent in eventMarkers.keys())
+					//console.log("TIPO: ",typeof idEvent);
+					//console.log("Type: ",typeof eventMarkers.keys().next().value);
+					//console.log("ID EVENT: ", idEvent);
+					//console.log("MAP_KEYS", eventMarkers.keys());
+					if(eventMarkers.has(String(idEvent))){
+						//console.log("SIZE before delete", eventMarkers.size);
+						console.log(`Remove marker whit ID: ${idEvent}`);
+						let marker = eventMarkers.get(idEvent);
+						marker.remove(); // Remove the marker from the map
+						eventMarkers.delete(String(idEvent));
+						console.log("Event marker removed");
+
+						//For debugging purposes, print the current size of the eventMarkers map
+						//console.log("SIZE after delete", eventMarkers.size);
+						//console.log("All ID in the map:", Array.from(eventMarkers.keys()));
+						//console.log("Actual size:", eventMarkers.size);
+					} else {
+						console.warn(`❌ Tentativo di rimuovere un ID non esistente: ${idEvent}`);
+					}
+				}
+				break;
+
 			// "object clean"/vehicle removal message: "objclean,<unique object ID>"
 			case 'objclean':
 				if(msg_fields.length !== 2) {
@@ -185,6 +272,60 @@ socket.on('message', (msg) => {
 		}
 	}
 });
+
+
+function toHex(str) {
+	return Array.from(str).map(c => c.charCodeAt(0).toString(16)).join(" ");
+}
+
+function update_EventMarker(mapref,idEvent,lat,lon,ele,CauseCode){
+	//console.log("Event marker update");
+	console.log("Event ID: "+idEvent);
+	if(mapref==null){
+		console.error("VehicleVisualizer: null map reference when attempting to update an object")
+	} else{
+		console.log("EVENTI_MARKERS", eventMarkers);
+		console.log("Tutti gli ID presenti:", Array.from(eventMarkers.keys()));
+		console.log("SIZE",eventMarkers.size)
+
+		if (!eventMarkers.has(String(idEvent))){
+			console.log("New marker");
+			let newmarkerEvent;
+			let initial_icon;
+			let initial_icon_idx;
+
+			if(CauseCode === 6) {
+				initial_icon = detectedIcyRoadIcon;
+				initial_icon_idx = ICY_ROAD_ICO_IDX;
+			} else {
+				if (CauseCode === 7){
+					initial_icon = genericDangerousIcon;
+					initial_icon_idx = GENERIC_DANGEROUS_SIGN_IDX;
+				}
+			}
+			newmarkerEvent = L.marker([lat,lon], {icon: initial_icon}).addTo(mapref);
+			newmarkerEvent.bindPopup("ID: " + idEvent + " - Cause Code: " + CauseCode);
+
+			eventMarkers.set(String(idEvent),newmarkerEvent);
+			eventMarkersIcons.set(String(idEvent),initial_icon_idx);
+			console.log("END NEW marker\n", idEvent);
+		} else {
+			console.log("Marker already exists", idEvent);
+			let markerEvent = eventMarkers.get(String(idEvent));
+			markerEvent.setLatLng([lat,lon]);
+
+			markerEvent.setPopupContent("EventID: "+idEvent+ " Cause Code:" +CauseCode);
+			if (CauseCode === 6 && eventMarkersIcons.get(String(idEvent)) !== ICY_ROAD_ICO_IDX){
+				markerEvent.setIcon(detectedIcyRoadIcon);
+				eventMarkersIcons.set(idEvent, ICY_ROAD_ICO_IDX);
+			} else if (CauseCode === 7 && eventMarkersIcons.get(String(idEvent)) !== GENERIC_DANGEROUS_SIGN_IDX){
+				markerEvent.setIcon(genericDangerousIcon);
+				eventMarkersIcons.set(idEvent, GENERIC_DANGEROUS_SIGN_IDX);
+			}
+			console.log("END marker already exists\n", idEvent);
+		}
+	}
+}
 
 // This function is used to update the position (and heading/rotation) of a marker/moving object on the map
 function update_marker(mapref,id,lat,lon,stationtype,heading)

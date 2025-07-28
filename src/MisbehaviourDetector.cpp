@@ -3,86 +3,141 @@
 #include <iostream>
 #include <cmath>
 #include "INIReader.h"
-
-uint64_t MisbehaviourDetector::processMessage(etsiDecoder::etsiDecodedData_t decoded_data, ldmmap::vehicleData_t vehdata, std::vector<ldmmap::vehicleData_t> PO_vec) {
-
+#include "utils.h"
+uint64_t MisbehaviourDetector::processCAM(etsiDecoder::etsiDecodedData_t decoded_data, ldmmap::vehicleData_t vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
 	uint64_t MB_CODE=0, unavailables;
 	ldmmap::LDMMap::LDMMap_error_t db_retval;
 
-	if (decoded_data.type==etsiDecoder::ETSI_DECODED_CAM || decoded_data.type==etsiDecoder::ETSI_DECODED_CAM_NOGN) {
-
-		//checks to be made here with decoded data
-		// MB_CODE=detectionFunction(...);
-		MB_CODE=0;
-		MB_CODE=individualCAMchecks(vehdata,unavailables);
-
-		// Avoid reporting the same vehicle multiple times
-		// in future the check should be on the cause of report
-		// if different another report can and should be issued
-		if (MB_CODE) {
-			// report to be created here
-			m_already_reported_mutex.lock();
-			if(std::find(m_already_reported.begin(), m_already_reported.end(), vehdata.stationID) == m_already_reported.end()) {
-				//only mark as reported without sending the actual report for now
-				m_already_reported.push_back(vehdata.stationID);
+	if (!certificateData.digest.empty()) {m_certStore_ptr->insert_or_assign(certificateData.digest,certificateData);}
+	// first check on security, for now the check is done but doesn't discard the packet if failed
+	switch (sec_retval) {
+		case Security::SECURITY_NO_SEC:
+			// no security so do nothing here
+			break;
+		case Security::SECURITY_VALID_CERTIFICATE:
+			m_certStore_ptr->insert_or_assign(certificateData.digest,certificateData);
+			break;
+		case Security::SECURITY_VERIFICATION_FAILED:
+			// left here for possible future changes
+			// at the moment this returnvalue makes geonet and then etsidecoder to return an error
+			// meaning the message is discarded before reaching here
+			break;
+		case Security::SECURITY_INVALID_CERTIFICATE:
+			// certificate verification failed
+			// std::cout <<"SECURITY CERTIFICATE INVALID" <<std::endl;
+			break;
+		case Security::SECURITY_DIGEST:
+			//std::cout <<"SECURITY ";
+			if (m_certStore_ptr->isValid(certificateData.digest)!=e_DigestValid_retval::DIGEST_OK) {
+				//digest invalid can use switch for each case instead
+				//std::cout <<"DIGEST INVALID" <<std::endl;
 			} else {
-				
+				// std::cout <<"DIGEST VALID" <<std::endl;
 			}
-			m_already_reported_mutex.unlock();
-		} else {
-		}
-		m_lastMessageCache.insert_or_assign(vehdata.stationID,vehdata);
-		return MB_CODE;
-
-	} else if (decoded_data.type==etsiDecoder::ETSI_DECODED_CPM || decoded_data.type==etsiDecoder::ETSI_DECODED_CPM_NOGN) {
-
-		//checks to be made here with decoded data
-		// MB_CODE=detectionFunction(...);
-		MB_CODE=0;
-
-		// Avoid reporting the same vehicle multiple times
-		// in future the check should be on the cause of report
-		// if different another report can and should be issued
-		if (MB_CODE) {
-			// report to be created here
-			m_already_reported_mutex.lock();
-			//using first element (at least one present) to retrieve CPM sender StationID
-			if(std::find(m_already_reported.begin(), m_already_reported.end(), PO_vec.front().perceivedBy) == m_already_reported.end()) {
-				//only mark as reported without sending the actual report for now
-				m_already_reported.push_back(PO_vec.front().perceivedBy);
-			} else {
-
-			}
-			m_already_reported_mutex.unlock();
-		}
-		return MB_CODE;
-
-	} else if (decoded_data.type==etsiDecoder::ETSI_DECODED_VAM || decoded_data.type==etsiDecoder::ETSI_DECODED_VAM_NOGN) {
-		
-		//checks to be made here with decoded data
-		// MB_CODE=detectionFunction(...);
-		MB_CODE=0;
-
-		// Avoid reporting the same vehicle multiple times
-		// in future the check should be on the cause of report
-		// if different another report can and should be issued
-		if (MB_CODE) {
-			// report to be created here
-			m_already_reported_mutex.lock();
-			if(std::find(m_already_reported.begin(), m_already_reported.end(), vehdata.stationID) == m_already_reported.end()) {
-				//only mark as reported without sending the actual report for now
-				m_already_reported.push_back(vehdata.stationID);
-			} else {
-				
-			}
-			m_already_reported_mutex.unlock();
-		}
-		return MB_CODE;
-
+			break;
+		default:
+			break;
 	}
 
+	//checks to be made here with decoded data
+	// MB_CODE=detectionFunction(...);
+	MB_CODE=0;
+	MB_CODE=individualCAMchecks(vehdata,unavailables);
+
+	// Avoid reporting the same vehicle multiple times
+	// in future the check should be on the cause of report
+	// if different another report can and should be issued
+	if (MB_CODE) {
+		// report to be created here
+		m_already_reported_mutex.lock();
+		if(std::find(m_already_reported.begin(), m_already_reported.end(), vehdata.stationID) == m_already_reported.end()) {
+			//only mark as reported without sending the actual report for now
+			m_already_reported.push_back(vehdata.stationID);
+		} else {
+			
+		}
+		m_already_reported_mutex.unlock();
+	} else {
+	}
+	m_lastMessageCache.insert_or_assign(vehdata.stationID,vehdata);
 	return MB_CODE;
-};
+}
+
+uint64_t MisbehaviourDetector::processDENM(etsiDecoder::etsiDecodedData_t decoded_data, ldmmap::eventData_t evedata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
+	uint64_t MB_CODE=0, unavailables;
+	ldmmap::LDMMap::LDMMap_error_t db_retval;
+
+	//checks to be made here with decoded data
+	// MB_CODE=detectionFunction(...);
+	MB_CODE=0;
+
+	// Avoid reporting the same vehicle multiple times
+	// in future the check should be on the cause of report
+	// if different another report can and should be issued
+	if (MB_CODE) {
+		// report to be created here
+		m_already_reported_mutex.lock();
+		if(std::find(m_already_reported.begin(), m_already_reported.end(), evedata.originatingStationID) == m_already_reported.end()) {
+			//only mark as reported without sending the actual report for now
+			m_already_reported.push_back(evedata.originatingStationID);
+		} else {
+			
+		}
+		m_already_reported_mutex.unlock();
+	}
+	return MB_CODE;
+}
+
+uint64_t MisbehaviourDetector::processVAM(etsiDecoder::etsiDecodedData_t decoded_data, ldmmap::vehicleData_t vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
+	uint64_t MB_CODE=0, unavailables;
+	ldmmap::LDMMap::LDMMap_error_t db_retval;
+
+	//checks to be made here with decoded data
+	// MB_CODE=detectionFunction(...);
+	MB_CODE=0;
+
+	// Avoid reporting the same vehicle multiple times
+	// in future the check should be on the cause of report
+	// if different another report can and should be issued
+	if (MB_CODE) {
+		// report to be created here
+		m_already_reported_mutex.lock();
+		if(std::find(m_already_reported.begin(), m_already_reported.end(), vehdata.stationID) == m_already_reported.end()) {
+			//only mark as reported without sending the actual report for now
+			m_already_reported.push_back(vehdata.stationID);
+		} else {
+			
+		}
+		m_already_reported_mutex.unlock();
+	}
+	return MB_CODE;
+}
+
+uint64_t MisbehaviourDetector::processCPM(etsiDecoder::etsiDecodedData_t decoded_data, std::vector<ldmmap::vehicleData_t> PO_vec, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
+	uint64_t MB_CODE=0, unavailables;
+	ldmmap::LDMMap::LDMMap_error_t db_retval;
+
+	//checks to be made here with decoded data
+	// MB_CODE=detectionFunction(...);
+	MB_CODE=0;
+
+	// Avoid reporting the same vehicle multiple times
+	// in future the check should be on the cause of report
+	// if different another report can and should be issued
+	if (MB_CODE) {
+		// report to be created here
+		m_already_reported_mutex.lock();
+		//using first element (at least one present) to retrieve CPM sender StationID
+		if(std::find(m_already_reported.begin(), m_already_reported.end(), PO_vec.front().perceivedBy) == m_already_reported.end()) {
+			//only mark as reported without sending the actual report for now
+			m_already_reported.push_back(PO_vec.front().perceivedBy);
+		} else {
+
+		}
+		m_already_reported_mutex.unlock();
+	}
+	return MB_CODE;
+}
 
 void MisbehaviourDetector::notifyOpTermination(uint64_t stationID) {
 	m_already_reported_mutex.lock();
@@ -427,6 +482,25 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 			}
 		}
 	}
+
+	osmium::object_id_type closestWay=m_osmStore->checkIfPointOnRoad(vehdata.lat,vehdata.lon);
+	if (closestWay==-1) {
+		// not on road: misbehaviour
+	} else {
+		// on road: can check the rest
+		if (m_osmStore->checkHeadingMatchesRoad(vehdata.heading,vehdata.lat,vehdata.lon,closestWay)) {
+			// misbehaviour
+		}
+		if (m_osmStore->checkSpeedOverTypeLimit(vehdata.speed_ms,closestWay)) {
+			// misbehaviour
+		}
+	}
+
+	// can move this in the if above since only makes sense to check when not on road
+	if (m_osmStore->checkIfPointInBuilding(vehdata.lat,vehdata.lon)) {
+		// misbehaviour
+	}
+	
 
 	return MB_CODE;
 }

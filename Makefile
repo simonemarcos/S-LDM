@@ -72,7 +72,7 @@ OBJ_CC+=$(OBJ_OSMIUM)
 # aggiunto -Igeographiclib-port -Iasn1cpp -Iinih/c -Iinih/cpp -Ilibosmium
 CXXFLAGS += -Wall -O3 -Iinclude -Ijson11 -Ivehicle-visualizer/include -Ioptions -std=c++17 -Idecoder-module/include -Idecoder-module/asn1/include -Igeographiclib-port -Iasn1cpp -Iinih/c -Iinih/cpp -Ilibosmium
 CFLAGS += -Wall -O3 -Iinclude -Ioptions -Idecoder-module/asn1/include -Igeographiclib-port
-LDLIBS += -lcpprest -lpthread -lcrypto -lm -lqpid-proton-cpp -lGeographic -lz -lexpat -lbz2
+LDLIBS += -lcpprest -lpthread -lcrypto -lm -lqpid-proton-cpp -lGeographic -lz -lexpat -lbz2 -lcurl
 
 .PHONY: all clean
 

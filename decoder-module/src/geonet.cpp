@@ -73,12 +73,14 @@ namespace etsiDecoder {
             //Secured packet
             sec_retval=m_security.extractSecurePacket (*dataIndication, certificateData);
             if (sec_retval == Security::SECURITY_VERIFICATION_FAILED) {
-                std::cout << "[INFO] [Decoder] Security verification failed" << std::endl;
+                std::cout << "[INFO] [Decoder] Security extraction failed" << std::endl;
                 retval=GN_SECURED_ERROR;
             } else {
-                std::cout << "[INFO] [Decoder] Security verification successful" << std::endl;
+                std::cout << "[INFO] [Decoder] Security extraction successful" << std::endl;
             }
             
+        } else {
+            sec_retval=Security::SECURITY_NO_SEC;
         }
         if(!decodeLT(basicH.GetLifeTime(),&dataIndication->GNRemainingLife))
         {

@@ -36,10 +36,11 @@ class Security
 public:
 
   typedef enum {
-    SECURITY_OK,
-    SECURITY_DIGEST,
-    SECURITY_VERIFICATION_FAILED,
-    SECURITY_INVALID_CERTIFICATE,
+    SECURITY_VALID_CERTIFICATE, // valid certificate received
+    SECURITY_INVALID_CERTIFICATE, // certificate not valid, proceed with decoding for sender info, the message will be discarded
+    SECURITY_DIGEST, // digest received, proceed with the decoding then verify digest validity after call to CertificateStore
+    SECURITY_VERIFICATION_FAILED, // this means a problem occurred (at the moment failed decoding or missing certificate), the message will be discarded
+    SECURITY_NO_SEC, // this is used to tell upper levels (mbd) to skip security checks as no security is present
   } Security_error_t;
 
 

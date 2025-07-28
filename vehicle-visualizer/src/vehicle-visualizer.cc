@@ -177,7 +177,7 @@ int vehicleVisualizer::sendEventObjectUpdate(uint64_t objEveID, double lat, doub
 	send_rval=send(m_sockfd,msg_buffer,msg_string.length()+1,0);
 
 	delete[] msg_buffer;
-	std::cout <<"send_rval="<<send_rval<<std::endl;
+	//std::cout <<"send_rval="<<send_rval<<std::endl;
 	return send_rval;
 }
 
@@ -208,7 +208,7 @@ vehicleVisualizer::sendEventObjectClean(uint64_t objEveID)
 
 	delete[] msg_buffer;
 
-	std::cout <<"send_rval CLEAN="<<send_rval<<std::endl;
+	//std::cout <<"send_rval CLEAN="<<send_rval<<std::endl;
 	return send_rval;
 
 }

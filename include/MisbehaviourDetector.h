@@ -7,6 +7,7 @@
 
 #include "LDMmap.h"
 #include "etsiDecoderFrontend.h"
+#include "OSMStore.h"
 
 #include <proton/message.hpp>
 
@@ -31,7 +32,9 @@ typedef struct MBDOptions {
 // Empty MBD, received messages from AMQPclient are just processed and inserted in LDM 
 class MisbehaviourDetector {
 	public:
-		MisbehaviourDetector(std::string logfile_name) : m_logfile_name(logfile_name) {
+		MisbehaviourDetector(double minlat, double minlon, double maxlat, double maxlon, CertificateStore *certStore_ptr, std::string logfile_name) : m_logfile_name(logfile_name) {
+			m_certStore_ptr=certStore_ptr;
+			m_osmStore=new OSMStore(minlat, minlon, maxlat, maxlon);
 			m_logfile_file=nullptr;
 			if (m_logfile_name!="") {
 				if (m_logfile_name=="stdout") {
@@ -43,7 +46,9 @@ class MisbehaviourDetector {
 			Init();
 		}
 
-		MisbehaviourDetector() {
+		MisbehaviourDetector(double minlat, double minlon, double maxlat, double maxlon, CertificateStore *certStore_ptr) {
+			m_certStore_ptr=certStore_ptr;
+			m_osmStore=new OSMStore(minlat, minlon, maxlat, maxlon);
 			m_logfile_name="";
 			m_logfile_file=nullptr;
 			Init();
@@ -66,8 +71,8 @@ class MisbehaviourDetector {
 			MB_POSITION_SPEED_INC,
 			MB_POSITION_HEADING_INC,
 			MB_HEADING_SPEED_INC,
-			MB_HEADING_YAW_RATE_INC,
-			MB_SPEED_ACCELERATION_INC,
+			MB_HEADING_YAW_RATE_INC, // 9
+			MB_SPEED_ACCELERATION_INC, // 10
 			MB_POS_AND_HEADING_DIRECTION_INC,
 			MB_LENGTH_WIDTH_INC,
 			MB_ACCELERATION_INC,
@@ -82,9 +87,11 @@ class MisbehaviourDetector {
 			MB_HEADING_YAW_RATE_IMP,
 			MB_SPEED_ACCELERATION_IMP,
 		} mbdMisbehaviourCode_e;
-		
-		uint64_t processMessage(etsiDecoder::etsiDecodedData_t decoded_data, ldmmap::vehicleData_t vehdata,
-			std::vector<ldmmap::vehicleData_t> PO_vec);
+
+		uint64_t processCAM(etsiDecoder::etsiDecodedData_t decoded_data, ldmmap::vehicleData_t vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
+		uint64_t processDENM(etsiDecoder::etsiDecodedData_t decoded_data, ldmmap::eventData_t evedata, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
+		uint64_t processVAM(etsiDecoder::etsiDecodedData_t decoded_data, ldmmap::vehicleData_t vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
+		uint64_t processCPM(etsiDecoder::etsiDecodedData_t decoded_data, std::vector<ldmmap::vehicleData_t> PO_vec, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
 		
 		// "protected" just in case new classes will be derived from this one
 	protected:
@@ -96,6 +103,9 @@ class MisbehaviourDetector {
 		FILE *m_logfile_file;
 
 		MBDOptions_t m_opts;
+
+		CertificateStore *m_certStore_ptr;
+		OSMStore *m_osmStore;
 
 		std::map<uint64_t, ldmmap::vehicleData_t> m_lastMessageCache;
 

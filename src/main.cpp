@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <thread>
 #include <time.h>
+#include "curl/curl.h"
 
 #include "LDMmap.h"
 #include "vehicle-visualizer.h"
@@ -65,9 +66,6 @@ void AMQPclient_t(ldmmap::LDMMap *db_ptr,options_t *opts_ptr,std::string logfile
 
 			// Set Misbehaviour Detector in any case, if disabled messages will just pass through
 			recvClient.setMisbehaviourDetector(mbd_ptr);
-
-			// Pass the certificate store pointer
-			recvClient.setCertificateStore(certStore_ptr);
 
 			// Set username, if specified
 			if(options_string_len(opts_ptr->amqp_broker_x[clientIndex].amqp_username)>0) {
@@ -135,9 +133,15 @@ void clearEventVisualizerObject(uint64_t id,void *vizObjVoidPtr) {
 	vizObjPtr->sendEventObjectClean(id);
 }
 
+struct cleanerArgs {
+	ldmmap::LDMMap *db_ptr;
+	CertificateStore *certStore_ptr;
+};
 void *DBcleaner_callback(void *arg) {
 	// Get the pointer to the database
-	ldmmap::LDMMap *db_ptr = static_cast<ldmmap::LDMMap *>(arg);
+	cleanerArgs *args = static_cast<cleanerArgs *>(arg);
+	ldmmap::LDMMap *db_ptr = args->db_ptr;
+	CertificateStore *certStore_ptr = args->certStore_ptr;
 
 	// Create a new timer
 	Timer tmr(DB_CLEANER_INTERVAL_SECONDS*1e3);
@@ -157,7 +161,7 @@ void *DBcleaner_callback(void *arg) {
 
 	while(terminatorFlag == false && tmr.waitForExpiration()==true) {
 			// ---- These operations will be performed periodically ----
-
+			certStore_ptr->deleteOlderThan(10*60*1e3); //removing certificates older than 10 minutes
 			db_ptr->deleteVehicleOlderThanAndExecute(DB_DELETE_OLDER_THAN_SECONDS*1e3,clearVisualizerObject,static_cast<void *>(globVehVizPtr));
 
 			// Delete events older than the specified validity duration
@@ -227,6 +231,7 @@ void *VehVizUpdater_callback(void *arg) {
                         // ---- These operations will be performed periodically ----
 
                         db_ptr->executeOnAllVehicleContents(&updateVisualizer, static_cast<void *>(&vehicleVisObj));
+						db_ptr->executeOnAllEventContents(&updateEventVisualizer, static_cast<void *>(&vehicleVisObj));
 
 			// --------
 	}
@@ -239,6 +244,7 @@ void *VehVizUpdater_callback(void *arg) {
 }
 
 int main(int argc, char **argv) {
+	curl_global_init(CURL_GLOBAL_DEFAULT);
 	terminatorFlag = false;
 
 	// DB cleaner thread ID
@@ -428,6 +434,9 @@ int main(int argc, char **argv) {
 	// Create a new DB object
 	ldmmap::LDMMap *db_ptr = new ldmmap::LDMMap();
 
+	// Create a CertificateStore object (the same object will be then accessed by all the AMQP clients, when using more than one client)
+	CertificateStore *certStore_ptr = new CertificateStore();
+
 	// Set a central latitude and longitude depending on the coverage area of the S-LDM (to be used only for visualization purposes -
 	// - it does not affect in any way the performance or the operations of the LDMMap DB module)
 	db_ptr->setCentralLatLon((sldm_opts.min_lat+sldm_opts.max_lat)/2.0, (sldm_opts.min_lon+sldm_opts.max_lon)/2.0);
@@ -436,7 +445,10 @@ int main(int argc, char **argv) {
 	// (e.g. every 5 s) the database through the pointer "db_ptr" and "cleaning" the entries which are too old
 	// pthread_attr_init(&tattr);
 	// pthread_attr_setdetachstate(&tattr,PTHREAD_CREATE_DETACHED);
-	pthread_create(&dbcleaner_tid,NULL,DBcleaner_callback,(void *) db_ptr);
+	cleanerArgs args;
+	args.db_ptr=db_ptr;
+	args.certStore_ptr=certStore_ptr;
+	pthread_create(&dbcleaner_tid,NULL,DBcleaner_callback,(void *) &args);
 	// pthread_attr_destroy(&tattr);
 
 	// We should also start here a second parallel thread, reading periodically the database (e.g. every 500 ms) and sending the vehicle data to
@@ -511,10 +523,7 @@ int main(int argc, char **argv) {
 
 	// Create a MisbehaviourDetector object (the same object will be then accessed by all the AMQP clients, when using more than one client)
 	// Options passed just for future uses, may get removed
-	MisbehaviourDetector mbd(logfile_name);
-	
-	// Create a CertificateStore object (the same object will be then accessed by all the AMQP clients, when using more than one client)
-	CertificateStore certStore;
+	MisbehaviourDetector *mbd_ptr=new MisbehaviourDetector(sldm_opts.min_lat,sldm_opts.min_lon,sldm_opts.max_lat,sldm_opts.max_lon,certStore_ptr,logfile_name);
 
 	// -*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*
 
@@ -541,7 +550,7 @@ int main(int argc, char **argv) {
 
 		for(unsigned int i=0;i<sldm_opts.num_amqp_x_enabled;i++) {
 			amqp_x_threads.emplace_back(AMQPclient_t,db_ptr,&sldm_opts,(logfile_name == "stdout" ? "stdout" : logfile_name + std::to_string(i+2)),
-				std::to_string(i+2),i,&itm,filter_str,&mainRecvClient,&mbd,&certStore);
+				std::to_string(i+2),i,&itm,filter_str,&mainRecvClient,mbd_ptr,certStore_ptr);
 		}
 	}
 
@@ -563,10 +572,7 @@ int main(int argc, char **argv) {
 			}
 
 			// Activate Misbehaviour Detector is enabled
-			mainRecvClient.setMisbehaviourDetector(&mbd);
-
-			// Pass the certificate store pointer to the client
-			mainRecvClient.setCertificateStore(&certStore);
+			mainRecvClient.setMisbehaviourDetector(mbd_ptr);
 
 			// Set username, if specified
 			if(options_string_len(sldm_opts.amqp_broker_one.amqp_username)>0) {

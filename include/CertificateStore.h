@@ -5,12 +5,6 @@
 #include "StationID.h"
 #include "CertificateBase.h"
 
-//#include "osmium/io/any_input.hpp"
-//#include "osmium/visitor.hpp"
-//#include "osmium/handler.hpp"
-//#include "osmium/osm/way.hpp"
-//#include "osmium/geom/haversine.hpp"
-
 typedef enum DigestValid_retval {
     DIGEST_OK,
     DIGEST_NOT_FOUND,
@@ -18,10 +12,10 @@ typedef enum DigestValid_retval {
 } e_DigestValid_retval;
 
 typedef struct storedCertificate {
-    StationID_t stationID;
-    uint64_t msg_timestamp;
-    uint64_t start;
-    uint64_t end;
+    uint64_t stationID;
+    uint64_t msg_timestamp; // received on_message_timestamp, comparable with get_timestamp_us() for age checks
+    uint64_t start; // in seconds from unix epoch, directly comparable with get_timestamp_s() 
+    uint64_t end; // in seconds from unix epoch, directly comparable with get_timestamp_s()
 	IssuerIdentifierSec_t issuer;
     std::string digest; //redundant with the key
 } storedCertificate_t;
@@ -29,9 +23,10 @@ typedef struct storedCertificate {
 class CertificateStore {
 public:
     void insert_or_assign(std::string digest, storedCertificate_t certificateData);
+    void deleteOlderThan(double time_milliseconds);
     e_DigestValid_retval isValid(std::string digest);
 
-    void test();
+    void printAll();
 
 private:
     std::map<std::string,storedCertificate_t> m_certificateStore; //map each digest with its data

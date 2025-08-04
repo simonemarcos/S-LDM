@@ -43,12 +43,17 @@ RUN cd qpid-proton-0.35.0 && \
     make all && \
     make install
 
+# Set ownership and permissions for the SLDM folder
+RUN chown -R sldm:sldm /home/sldm/SLDM && \
+    chmod -R 755 /home/sldm/SLDM
+
+USER sldm
+
 # Compile the S-LDM
 RUN cd /home/sldm/SLDM && \
     make fullclean && \
     make
-    
-USER sldm
+
 
 WORKDIR /home/sldm/SLDM
 # EXPOSE 5671 5672 8161

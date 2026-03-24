@@ -23,10 +23,10 @@ typedef struct HighwayInfo_s {
 class OSMStore {
 public:
     
-    OSMStore(double minlat, double minlon, double maxlat, double maxlon);
+    OSMStore(double minlat, double minlon, double maxlat, double maxlon, int max_size);
 
     // returns the highway id that matches the distance constraint, if no highway is found returns -1
-    osmium::object_id_type checkIfPointOnRoad(double lat, double lon);
+    osmium::object_id_type checkIfPointOnRoad(double lat, double lon, double distance=0);
 
     // return true is heading is consistent with the road, false otherwise
     bool checkHeadingMatchesRoad(double heading, double lat, double lon, osmium::object_id_type highwayID);
@@ -37,6 +37,8 @@ public:
     // return true if speed is over the road type limit
     bool checkSpeedOverTypeLimit(double speed, osmium::object_id_type highwayID);
 
+    bool checkIfPointIsStop(double lat, double lon, bool isBusStop);
+
     void printAll();
 private:
 
@@ -45,9 +47,12 @@ private:
     double sumBuilding=0; double countBuilding=0;
     double m_minlat, m_lat_increment;
     double m_minlon, m_lon_increment;
+    int latSectors, lonSectors;
 
     std::map<osmium::object_id_type,HighwayInfo_t> m_highways_info;
     std::map<std::tuple<int,int>,std::map<osmium::object_id_type,way_linestring>> m_highways_by_sector;
 
     std::map<std::tuple<int,int>,std::map<osmium::object_id_type,way_polygon>> m_buildings_by_sector;
+    std::map<osmium::object_id_type,point2d> m_bus_stops;
+    std::map<osmium::object_id_type,point2d> m_tram_stops;
 };

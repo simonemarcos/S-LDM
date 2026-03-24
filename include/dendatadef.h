@@ -7,6 +7,10 @@
 #include <string>
 #include "optionalDataItem.h"
 
+extern "C" {
+	#include "DENM.h"
+}
+
 #define eventDataVector_t(name) std::vector<ldmmap::eventData_t> name;
 
  #define DEG_2_RAD(val) ((val)*M_PI/180.0)
@@ -105,17 +109,26 @@ namespace ldmmap{
 
 		//STUATION CONTAINER
 		e_EventTypeLDM eventCauseCode;
+		long eventSubCauseCode; // matching defined subcause data type long
+		OptionalDataItem<EventHistory> eventHistory;
 		/*
 		OptionalDataItem<long> eventInformationQuality;
 		OptionalDataItem<long> eventCauseCodeType;
 		OptionalDataItem<long> eventSubCauseCodeType;
+		*/
 
 		//LOCATION CONTAINER -> OPTIONAL
+		OptionalDataItem<Traces_t> traces;
+		OptionalDataItem<RoadType_t> roadType;
 		OptionalDataItem<long>  eventSpeed; //speed value
 		OptionalDataItem<long>  eventPositionHeading; //heading value
+		/*
 		OptionalDataItem<double>  eventTraces;
 		OptionalDataItem<long>  eventRoadType;
 		*/
+
+		//A LA CARTE CONTAINER -> OPTIONAL
+		OptionalDataItem<long> vehicleMass;
 	} eventData_t;
 }
 

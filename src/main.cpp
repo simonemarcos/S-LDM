@@ -136,12 +136,14 @@ void clearEventVisualizerObject(uint64_t id,void *vizObjVoidPtr) {
 struct cleanerArgs {
 	ldmmap::LDMMap *db_ptr;
 	CertificateStore *certStore_ptr;
+	MisbehaviourDetector *mbd_ptr;
 };
 void *DBcleaner_callback(void *arg) {
 	// Get the pointer to the database
 	cleanerArgs *args = static_cast<cleanerArgs *>(arg);
 	ldmmap::LDMMap *db_ptr = args->db_ptr;
 	CertificateStore *certStore_ptr = args->certStore_ptr;
+	MisbehaviourDetector *mbd_ptr = args->mbd_ptr;
 
 	// Create a new timer
 	Timer tmr(DB_CLEANER_INTERVAL_SECONDS*1e3);
@@ -159,9 +161,22 @@ void *DBcleaner_callback(void *arg) {
 
 	POLL_DEFINE_JUNK_VARIABLE();
 
+	// used for cleanups that need to be done less frequently than DB_CLEANER_INTERVAL_SECONDS
+	int counter=0;
+
 	while(terminatorFlag == false && tmr.waitForExpiration()==true) {
 			// ---- These operations will be performed periodically ----
-			certStore_ptr->deleteOlderThan(10*60*1e3); //removing certificates older than 10 minutes
+
+			counter+=DB_CLEANER_INTERVAL_SECONDS;
+			// check every 30 seconds
+			if (counter%30==0) {
+				mbd_ptr->cleanupPendingEvents(); // cleanup for events that have been left pending
+				// check every 10 minutes
+				if (counter>=10*60) {
+					certStore_ptr->deleteOlderThan(10*60*1e3); //removing certificates older than 10 minutes
+					counter=0;
+				}
+			}
 			db_ptr->deleteVehicleOlderThanAndExecute(DB_DELETE_OLDER_THAN_SECONDS*1e3,clearVisualizerObject,static_cast<void *>(globVehVizPtr));
 
 			// Delete events older than the specified validity duration
@@ -431,11 +446,31 @@ int main(int argc, char **argv) {
 	/* ------------------------------------------------------------------------------------------------------------------------------------ */
 	/* ------------------------------------------------------------------------------------------------------------------------------------ */
 
+	// Get the log file name from the options, if available, to enable log mode inside the AMQP client and the S-LDM modules
+	std::string logfile_name="";
+	if(options_string_len(sldm_opts.logfile_name)>0) {
+		logfile_name=std::string(options_string_pop(sldm_opts.logfile_name));
+		if(logfile_name!="stdout") {
+			time_t rawtime;
+			struct tm * timeinfo;
+  			char buffer [25] = {NULL};
+  			time (&rawtime);
+  			timeinfo = localtime (&rawtime);
+  			strftime (buffer,25,"-%Y%m%d-%H:%M:%S",timeinfo);
+			logfile_name += buffer;
+		}
+
+	}
+
 	// Create a new DB object
 	ldmmap::LDMMap *db_ptr = new ldmmap::LDMMap();
 
 	// Create a CertificateStore object (the same object will be then accessed by all the AMQP clients, when using more than one client)
 	CertificateStore *certStore_ptr = new CertificateStore();
+
+	// Create a MisbehaviourDetector object (the same object will be then accessed by all the AMQP clients, when using more than one client)
+	// Options passed just for future uses, may get removed
+	MisbehaviourDetector *mbd_ptr=new MisbehaviourDetector(sldm_opts.min_lat,sldm_opts.min_lon,sldm_opts.max_lat,sldm_opts.max_lon,certStore_ptr,db_ptr,logfile_name);
 
 	// Set a central latitude and longitude depending on the coverage area of the S-LDM (to be used only for visualization purposes -
 	// - it does not affect in any way the performance or the operations of the LDMMap DB module)
@@ -448,6 +483,7 @@ int main(int argc, char **argv) {
 	cleanerArgs args;
 	args.db_ptr=db_ptr;
 	args.certStore_ptr=certStore_ptr;
+	args.mbd_ptr=mbd_ptr;
 	pthread_create(&dbcleaner_tid,NULL,DBcleaner_callback,(void *) &args);
 	// pthread_attr_destroy(&tattr);
 
@@ -458,22 +494,6 @@ int main(int argc, char **argv) {
 	vizOptions_t vizParams = {db_ptr,&sldm_opts};
 	pthread_create(&vehviz_tid,NULL,VehVizUpdater_callback,(void *) &vizParams);
 	// pthread_attr_destroy(&tattr);
-
-	// Get the log file name from the options, if available, to enable log mode inside the AMQP client and the S-LDM modules
-	std::string logfile_name="";
-	if(options_string_len(sldm_opts.logfile_name)>0) {
-		logfile_name=std::string(options_string_pop(sldm_opts.logfile_name));
-		if(logfile_name!="stdout") {
-			time_t rawtime;
-			struct tm * timeinfo;
-  			char buffer [25] = {NULL};
-  			time (&rawtime);	
-  			timeinfo = localtime (&rawtime);
-  			strftime (buffer,25,"-%Y%m%d-%H:%M:%S",timeinfo);
-			logfile_name += buffer;
-		}
-
-	}
 
 	// Create an indicatorTriggerManager object (the same object will be then accessed by all the AMQP clients, when using more than one client)
 	indicatorTriggerManager itm(db_ptr,&sldm_opts);
@@ -520,10 +540,6 @@ int main(int argc, char **argv) {
 			fclose(logfile_file);
 		}
 	}
-
-	// Create a MisbehaviourDetector object (the same object will be then accessed by all the AMQP clients, when using more than one client)
-	// Options passed just for future uses, may get removed
-	MisbehaviourDetector *mbd_ptr=new MisbehaviourDetector(sldm_opts.min_lat,sldm_opts.min_lon,sldm_opts.max_lat,sldm_opts.max_lon,certStore_ptr,logfile_name);
 
 	// -*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*
 

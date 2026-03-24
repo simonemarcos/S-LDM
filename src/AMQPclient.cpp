@@ -405,7 +405,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		certificateData.msg_timestamp=vehdata.on_msg_timestamp_us;
 
 		if (m_MBDetection_enabled==true) {
-			MBD_retval=m_MBDetector_ptr->processCAM(decodedData,vehdata,sec_retval,certificateData);
+			MBD_retval=m_MBDetector_ptr->processCAM(message_bin,vehdata,sec_retval,certificateData);
 			if (MBD_retval!=0) {
 				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
 				return;
@@ -427,43 +427,40 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		certificateData.stationID=evedata.originatingStationID;
 		certificateData.msg_timestamp=evedata.on_msg_timestampDENM_us;
 
+		// DENM is a special case where the MBD has to hold the events for further checks, so the client either calls MBD or inserts the event
 		if (m_MBDetection_enabled==true) {
-			MBD_retval=m_MBDetector_ptr->processDENM(decodedData,evedata,sec_retval,certificateData);
-			if (MBD_retval!=0) {
-				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
-				return;
-			}
-		}
-
-		ldmmap::LDMMap::returnedEventData_t retEvent;
-		ldmmap::LDMMap::event_LDMMap_error_t db_everetval;
-		uint64_t nearUpdateEvent_key = 0;
-		uint64_t keyEvent = m_db_ptr->KEY_EVENT(evedata.eventLatitude,evedata.eventLongitude,evedata.eventElevation,evedata.eventCauseCode);
-		std::cout << "[DEBUG] Updating event with eventKey: " << keyEvent << std::endl;
-		if (!evedata.eventTermination.isAvailable()) {
-			db_everetval = m_db_ptr->lookupAndUpdateEvent(keyEvent,evedata.eventLatitude,evedata.eventLongitude,
-			evedata.eventCauseCode,evedata,retEvent, nearUpdateEvent_key);
-			if (db_everetval == 6) {
-				//std::cout <<"EVENT NOT FOUND" << std::endl; //For test
-			} else if (db_everetval == 2 || db_everetval == 3) {
-				eventMapModified.store(true);
-				//std::cout << "Updated Near Event Key: " << nearUpdateEvent_key << std::endl;
-			}
-			//std::cout <<"Result of lookupAndUpdate = " << db_everetval << std::endl; //For test
-			if (db_everetval == ldmmap::LDMMap::event_LDMMAP_ITEM_NOT_FOUND) {
-				db_everetval = m_db_ptr->insertEvent(evedata,keyEvent);
-				eventMapModified.store(true);
-				//std::cout <<"INSERT EVENT with KEY: " <<keyEvent << std::endl; //For test
-			}
+			m_MBDetector_ptr->processDENM(message_bin,evedata,sec_retval,certificateData);
 		} else {
-			db_everetval = m_db_ptr->removeEvent(keyEvent);
-			eventMapModified.store(true);
-			//std::cout <<"REMOVE EVENT with KEY: " <<keyEvent << std::endl; //For test
-		}
-			
-		if(db_everetval!=ldmmap::LDMMap::event_LDMMAP_OK && db_retval!=ldmmap::LDMMap::event_LDMMAP_UPDATED
-			&& db_retval!=ldmmap::LDMMap::event_LDMMAP_NEAR_EVENT_UPDATED  && db_retval!=ldmmap::LDMMap::event_LDMMAP_REMOVED) {
-			std::cerr << "[WARNING] Operation on the database for event " <<keyEvent << "failed!" << std::endl;
+			ldmmap::LDMMap::returnedEventData_t retEvent;
+			ldmmap::LDMMap::event_LDMMap_error_t db_everetval;
+			uint64_t nearUpdateEvent_key = 0;
+			uint64_t keyEvent = m_db_ptr->KEY_EVENT(evedata.eventLatitude,evedata.eventLongitude,evedata.eventElevation,evedata.eventCauseCode);
+			std::cout << "[DEBUG] Updating event with eventKey: " << keyEvent << std::endl;
+			if (!evedata.eventTermination.isAvailable()) {
+				db_everetval = m_db_ptr->lookupAndUpdateEvent(keyEvent,evedata.eventLatitude,evedata.eventLongitude,
+				evedata.eventCauseCode,evedata,retEvent, nearUpdateEvent_key);
+				if (db_everetval == 6) {
+					//std::cout <<"EVENT NOT FOUND" << std::endl; //For test
+				} else if (db_everetval == 2 || db_everetval == 3) {
+					eventMapModified.store(true);
+					//std::cout << "Updated Near Event Key: " << nearUpdateEvent_key << std::endl;
+				}
+				//std::cout <<"Result of lookupAndUpdate = " << db_everetval << std::endl; //For test
+				if (db_everetval == ldmmap::LDMMap::event_LDMMAP_ITEM_NOT_FOUND) {
+					db_everetval = m_db_ptr->insertEvent(evedata,keyEvent);
+					eventMapModified.store(true);
+					//std::cout <<"INSERT EVENT with KEY: " <<keyEvent << std::endl; //For test
+				}
+			} else {
+				db_everetval = m_db_ptr->removeEvent(keyEvent);
+				eventMapModified.store(true);
+				//std::cout <<"REMOVE EVENT with KEY: " <<keyEvent << std::endl; //For test
+			}
+				
+			if(db_everetval!=ldmmap::LDMMap::event_LDMMAP_OK && db_retval!=ldmmap::LDMMap::event_LDMMAP_UPDATED
+				&& db_retval!=ldmmap::LDMMap::event_LDMMAP_NEAR_EVENT_UPDATED  && db_retval!=ldmmap::LDMMap::event_LDMMAP_REMOVED) {
+				std::cerr << "[WARNING] Operation on the database for event " <<keyEvent << "failed!" << std::endl;
+			}
 		}
 
 	} else if (decodedData.type==etsiDecoder::ETSI_DECODED_CPM || decodedData.type==etsiDecoder::ETSI_DECODED_CPM_NOGN) {
@@ -478,7 +475,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		}
 
 		if (m_MBDetection_enabled==true) {
-			MBD_retval=m_MBDetector_ptr->processCPM(decodedData,PO_vec,sec_retval,certificateData);
+			MBD_retval=m_MBDetector_ptr->processCPM(message_bin,PO_vec,sec_retval,certificateData);
 			if (MBD_retval!=0) {
 				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
 				return;
@@ -503,7 +500,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		certificateData.msg_timestamp=vehdata.on_msg_timestamp_us;
 
 		if (m_MBDetection_enabled==true) {
-			MBD_retval=m_MBDetector_ptr->processVAM(decodedData,vehdata,sec_retval,certificateData);
+			MBD_retval=m_MBDetector_ptr->processVAM(message_bin,vehdata,sec_retval,certificateData);
 			if (MBD_retval!=0) {
 				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
 				return;
@@ -687,6 +684,10 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 		vehdata.speed_ms=ldmmap::e_DataUnavailableValue::speed;
 	}
 	vehdata.gnTimestamp = gn_timestamp;
+	vehdata.gnLat = decodedData.gnLat;
+	vehdata.gnLon = decodedData.gnLon;
+	vehdata.gnSpeed = decodedData.gnSpeed;
+	vehdata.gnHeading = decodedData.gnHeading;
 	vehdata.stationID = stationID; // It is very important to save also the stationID
 	vehdata.camTimestamp = static_cast<long>(decoded_cam->cam.generationDeltaTime);
 	vehdata.stationType = static_cast<ldmmap::e_StationTypeLDM>(decoded_cam->cam.camParameters.basicContainer.stationType);
@@ -733,9 +734,28 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 		vehdata.driveDirection=ldmmap::e_DataUnavailableValue::driveDirection;
 	}
 	if (decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.yawRate.yawRateValue!=YawRateValue_unavailable) {
-		vehdata.yawRate=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.yawRate.yawRateValue/10.0;
+		vehdata.yawRate=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.yawRate.yawRateValue/100.0;
 	} else {
 		vehdata.yawRate=ldmmap::e_DataUnavailableValue::yawRate;
+	}
+	if (decoded_cam->cam.camParameters.specialVehicleContainer!=nullptr) {
+		switch (decoded_cam->cam.camParameters.specialVehicleContainer->present) {
+			case SpecialVehicleContainer_PR_emergencyContainer:
+				vehdata.lightBarActivated.setData(*decoded_cam->cam.camParameters.specialVehicleContainer->choice.emergencyContainer.lightBarSirenInUse.buf);
+				break;
+			case SpecialVehicleContainer_PR_rescueContainer:
+				vehdata.lightBarActivated.setData(*decoded_cam->cam.camParameters.specialVehicleContainer->choice.rescueContainer.lightBarSirenInUse.buf);
+				break;
+			case SpecialVehicleContainer_PR_specialTransportContainer:
+				vehdata.lightBarActivated.setData(*decoded_cam->cam.camParameters.specialVehicleContainer->choice.specialTransportContainer.lightBarSirenInUse.buf);
+				break;
+			case SpecialVehicleContainer_PR_safetyCarContainer:
+				vehdata.lightBarActivated.setData(*decoded_cam->cam.camParameters.specialVehicleContainer->choice.safetyCarContainer.lightBarSirenInUse.buf);
+				break;
+			case SpecialVehicleContainer_PR_roadWorksContainerBasic:
+				vehdata.lightBarActivated.setData(*decoded_cam->cam.camParameters.specialVehicleContainer->choice.roadWorksContainerBasic.lightBarSirenInUse.buf);
+				break;
+		}
 	}
 	/*
 	// Manage the low frequency container data
@@ -939,14 +959,45 @@ bool AMQPClient::decodeDENM(etsiDecoder::etsiDecodedData_t decodedData, proton::
 	if (decoded_denm->denm.situation != nullptr) {
 
 		// If the eventType is not available, set the cause code to unknown
-		if(decoded_denm->denm.situation->eventType.causeCode != -1) {
+		if (decoded_denm->denm.situation->eventType.causeCode != -1) {
 			ldmmap::e_EventTypeLDM CauseCode = static_cast<ldmmap::e_EventTypeLDM>(decoded_denm->denm.situation->eventType.causeCode);
 			evedata.eventCauseCode = CauseCode;
+			if (decoded_denm->denm.situation->eventType.subCauseCode != 0) {
+				evedata.eventSubCauseCode = decoded_denm->denm.situation->eventType.subCauseCode;
+			}
 		} else {
 			evedata.eventCauseCode = ldmmap::EventType_LDM_unknown;
 		}
+
+		if (decoded_denm->denm.situation->eventHistory != nullptr) {
+			evedata.eventHistory.setData(*decoded_denm->denm.situation->eventHistory);
+		}
 	} else {
 		evedata.eventCauseCode = ldmmap::EventType_LDM_unknown;
+	}
+
+	// Location container
+	if (decoded_denm->denm.location != nullptr) {
+
+		if (decoded_denm->denm.location->roadType != nullptr ) {
+			evedata.roadType.setData(*decoded_denm->denm.location->roadType);
+		}
+		if (decoded_denm->denm.location->eventSpeed != nullptr ) {
+			evedata.eventSpeed.setData(decoded_denm->denm.location->eventSpeed->speedValue);
+		}
+		if (decoded_denm->denm.location->eventPositionHeading != nullptr ) {
+			evedata.eventPositionHeading.setData(decoded_denm->denm.location->eventPositionHeading->headingValue);
+		}
+		evedata.traces.setData(decoded_denm->denm.location->traces);
+	}
+
+	// A la carte container
+	if (decoded_denm->denm.alacarte != nullptr) {
+
+		// impact reduction (IRCs)
+		if (decoded_denm->denm.alacarte->impactReduction != nullptr) {
+			evedata.vehicleMass.setData(decoded_denm->denm.alacarte->impactReduction->vehicleMass);
+		}
 	}
 
 	uint64_t keyEvent = m_db_ptr->KEY_EVENT(lat,lon,ele,evedata.eventCauseCode);
@@ -1056,13 +1107,40 @@ bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 				//Translate to ego vehicle coordinates
 				ldmmap::vehicleData_t PO_data;
 				PO_data.detected = true;
-				PO_data.vehicleLength = asn1cpp::getField(PO_seq->objectDimensionX->value,long);
-				PO_data.vehicleWidth = asn1cpp::getField(PO_seq->objectDimensionY->value,long);
-				PO_data.heading = asn1cpp::getField(PO_seq->angles->zAngle.value,double) / DECI;
+				PO_data.vehicleLength=(asn1cpp::getField(PO_seq->objectDimensionX->value,long));
+				PO_data.vehicleWidth=(asn1cpp::getField(PO_seq->objectDimensionY->value,long));
+				PO_data.heading = asn1cpp::getField(PO_seq->angles->zAngle.value,double);
+				if (PO_data.heading!=HeadingValue_unavailable) {
+					PO_data.heading = PO_data.heading / DECI;
+				} else {
+					PO_data.heading=ldmmap::e_DataUnavailableValue::heading;
+				}
 				PO_data.xSpeed = asn1cpp::getField(PO_seq->velocity->choice.cartesianVelocity.xVelocity.value,long);
-				PO_data.xSpeed = asn1cpp::getField(PO_seq->velocity->choice.cartesianVelocity.yVelocity.value,long);
-				PO_data.speed_ms = (sqrt (pow(PO_data.xSpeed,2) +
-											pow(PO_data.ySpeed,2)))/CENTI;
+				PO_data.ySpeed = asn1cpp::getField(PO_seq->velocity->choice.cartesianVelocity.yVelocity.value,long);
+				if (PO_data.xSpeed!=SpeedValue_unavailable && PO_data.ySpeed!=SpeedValue_unavailable) {
+					PO_data.speed_ms = (sqrt (pow(PO_data.xSpeed,2) +
+												pow(PO_data.ySpeed,2)))/CENTI;
+				} else {
+					PO_data.speed_ms=ldmmap::e_DataUnavailableValue::speed;
+				}
+				PO_data.xAcc = asn1cpp::getField(PO_seq->acceleration->choice.cartesianAcceleration.xAcceleration.value,long);
+				PO_data.yAcc = asn1cpp::getField(PO_seq->acceleration->choice.cartesianAcceleration.yAcceleration.value,long);
+				if (PO_data.xAcc!=AccelerationValue_unavailable && PO_data.yAcc!=AccelerationValue_unavailable) {
+					PO_data.longitudinalAcceleration = (sqrt (pow(PO_data.xAcc,2) +
+												pow(PO_data.yAcc,2)))/DECI;
+				} else {
+					PO_data.longitudinalAcceleration=ldmmap::e_DataUnavailableValue::longitudinalAcceleration;
+				}
+				PO_data.curvature=ldmmap::e_DataUnavailableValue::curvature;
+				PO_data.driveDirection=ldmmap::e_DataUnavailableValue::driveDirection;
+				if (PO_seq->zAngularVelocity!=nullptr) {
+					PO_data.yawRate = asn1cpp::getField(PO_seq->zAngularVelocity->value,long);
+					if (PO_data.yawRate==CartesianAngularVelocityComponentValue_unavailable) {
+						PO_data.yawRate=ldmmap::e_DataUnavailableValue::yawRate;
+					}
+				} else {
+					PO_data.yawRate=ldmmap::e_DataUnavailableValue::yawRate;
+				}
 
 				double lonPO, latPO, from_x,from_y,xDistance, yDistance;
 				double gammar=0;
@@ -1183,6 +1261,9 @@ bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	                               l_inst_period);
 	                }
 	            }
+				PO_data.vruEnvironment=VruEnvironment_unavailable;
+				PO_data.vruMovementControl=VruMovementControl_unavailable;
+				PO_data.vruSizeClass=VruSizeClass_unavailable;
 				PO_vec.emplace_back(PO_data);
 	        }
 	    }
@@ -1266,6 +1347,26 @@ bool AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	
 	vehdata.vehicleWidth = ldmmap::OptionalDataItem<long>(false);
 	vehdata.vehicleLength = ldmmap::OptionalDataItem<long>(false);
+
+	if(decoded_vam->vam.vamParameters.vruLowFrequencyContainer!=NULL) {
+		if(decoded_vam->vam.vamParameters.vruLowFrequencyContainer->sizeClass!=NULL) {
+			vehdata.vruSizeClass=static_cast<uint8_t>(*decoded_vam->vam.vamParameters.vruLowFrequencyContainer->sizeClass);
+		} else {
+			vehdata.vruSizeClass=VruSizeClass_unavailable;
+		}
+	} else {
+		vehdata.vruSizeClass=VruSizeClass_unavailable;
+	}
+	if (decoded_vam->vam.vamParameters.vruHighFrequencyContainer.movementControl!=NULL) {
+		vehdata.vruMovementControl=static_cast<uint8_t>(*decoded_vam->vam.vamParameters.vruHighFrequencyContainer.movementControl);
+	} else {
+		vehdata.vruMovementControl=VruMovementControl_unavailable;
+	}
+	if (decoded_vam->vam.vamParameters.vruHighFrequencyContainer.environment!=NULL) {
+		vehdata.vruEnvironment=static_cast<uint8_t>(*decoded_vam->vam.vamParameters.vruHighFrequencyContainer.environment);
+	} else {
+		vehdata.vruEnvironment=VruEnvironment_unavailable;
+	}
 	
 	// If logging is enabled, compute also an "instantaneous update period" metric (i.e., how much time has passed between two consecutive vehicle updates)
 	if(m_logfile_name!="") {

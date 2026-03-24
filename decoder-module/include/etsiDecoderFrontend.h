@@ -48,6 +48,11 @@ namespace etsiDecoder {
 		uint16_t distA;
 		uint16_t distB;
 		uint16_t angle;
+		//For geonet checks
+		int32_t gnLat;
+	    int32_t gnLon;
+		int16_t gnSpeed;
+		uint16_t gnHeading;
 	} etsiDecodedData_t;
 
 	class decoderFrontend {

@@ -29,6 +29,9 @@ namespace ldmmap {
 		StationType_LDM_trailer = 9,
 		StationType_LDM_specialVehicles	= 10,
 		StationType_LDM_tram = 11,
+		StationType_LDM_lightVruVehicle = 12,
+		StationType_LDM_animal = 13,
+		StationType_LDM_agricultural = 14,
 		StationType_LDM_roadSideUnit = 15,
 		StationType_LDM_specificCategoryVehicle1 = 100,
 		StationType_LDM_specificCategoryVehicle2 = 101,
@@ -75,6 +78,7 @@ namespace ldmmap {
 
 		// Low frequency container data
 		OptionalDataItem<uint8_t> exteriorLights; // Bit string with exterior lights status
+		OptionalDataItem<uint8_t> lightBarActivated;
 		
 		// CPM patch
 		uint64_t lastCPMincluded;
@@ -83,8 +87,8 @@ namespace ldmmap {
 		long yDistance;
 		long xSpeed;
 		long ySpeed;
-		//long xAcc;
-		//long yAcc;
+		long xAcc;
+		long yAcc;
 		//long longitudinalAcceleration;
 		long confidence;
 		long angle;
@@ -95,15 +99,24 @@ namespace ldmmap {
 		double rssi_dBm;
 		std::string ipaddr;
 		std::string publicipaddr;
+		uint8_t vruMovementControl;
+		uint8_t vruEnvironment;
+		uint8_t vruSizeClass;
 
 		//patch MBD
 		uint8_t driveDirection;
-		int16_t longitudinalAcceleration;
-		int16_t curvature;
-		int16_t yawRate;
+		double longitudinalAcceleration;
+		double curvature;
+		double yawRate;
 
 		//patch security
 		std::string certDigest;
+
+		//For geonet checks
+		int32_t gnLat;
+	    int32_t gnLon;
+		int16_t gnSpeed;
+		uint16_t gnHeading;
 	} vehicleData_t;
 }
 

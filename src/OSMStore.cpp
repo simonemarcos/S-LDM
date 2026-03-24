@@ -13,6 +13,8 @@
 std::map<osmium::object_id_type,HighwayInfo_t> highways_info;
 std::map<osmium::object_id_type,way_linestring> highways_linestrings;
 std::map<osmium::object_id_type,way_polygon> buildings_polygons;
+std::map<osmium::object_id_type,point2d> bus_stops;
+std::map<osmium::object_id_type,point2d> tram_stops;
 
 std::map<std::string,double> maxSpeedByRoadType={
     {"",14},
@@ -80,15 +82,24 @@ public:
         }
     }
 
+    static void node(const osmium::Node& node) {
+        // check if its bus_stop or tram_stop
+        if (node.tags().get_value_by_key("highway","")=="bus_stop") {
+            bus_stops.emplace(node.id(),point2d(node.location().lat(),node.location().lon()));
+        }
+        if (node.tags().get_value_by_key("railway","")=="tram_stop") {
+            tram_stops.emplace(node.id(),point2d(node.location().lat(),node.location().lon()));
+        }
+    }
 
 };
 
-size_t WriteCallback(void* ptr, size_t size, size_t nmemb, void* stream) {
+size_t WriteCallbackOSM(void* ptr, size_t size, size_t nmemb, void* stream) {
     size_t written = fwrite(ptr, size, nmemb, (FILE *)stream);
     return written;
 }
 
-OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon) {
+OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon, int max_size) {
     // CHECK FOR EXISTING CACHE
     double minlat_r, minlon_r, maxlat_r, maxlon_r, last_modified;
     int cached;
@@ -138,6 +149,7 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon) {
         std::string minlon_s=std::to_string(minlon);
         std::string maxlat_s=std::to_string(maxlat);
         std::string maxlon_s=std::to_string(maxlon);
+        std::string bounds="("+minlat_s+","+minlon_s+","+maxlat_s+","+maxlon_s+");";
         
         std::string url="https://overpass-api.de/api/interpreter";
         std::string query=
@@ -146,11 +158,12 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon) {
                 "way[highway]"
                 "[highway!=\"busway\"][highway!=\"cycleway\"][highway!=\"footway\"][highway!=\"path\"]"
                 "[highway!=\"corridor\"][highway!=\"steps\"][highway!=\"bridleway\"][highway!=\"bus_guideway\"]"
-                "[highway!=\"via_ferrata\"][highway!=\"proposed\"][highway!=\"construction\"][highway!=\"pedestrian\"]"
-                "("+minlat_s+","+minlon_s+","+maxlat_s+","+maxlon_s+");"
+                "[highway!=\"via_ferrata\"][highway!=\"proposed\"][highway!=\"construction\"][highway!=\"pedestrian\"]"+bounds
 
-                "way[building]("+minlat_s+","+minlon_s+","+maxlat_s+","+maxlon_s+");"
-            ");"
+                +"way[building]"+bounds
+                +"node[highway=bus_stop]"+bounds
+                +"node[railway=tram_stop]"+bounds
+            +");"
             "(._;>;);"
             "out;";
         CURL *curl=curl_easy_init();
@@ -161,7 +174,7 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon) {
 
         std::string file="maps/map.osm";
         FILE *fp=fopen(file.c_str(),"w");
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallbackOSM);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
 
         CURLcode res=curl_easy_perform(curl);
@@ -192,11 +205,13 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon) {
         for (auto w:highways_info) {
             m_highways_info.emplace(w.first,w.second);
         }
+        m_bus_stops=bus_stops;
+        m_tram_stops=tram_stops;
     } catch(const std::exception &e) {
         std::cerr <<e.what() <<std::endl;
     }
 
-    int max_size=250;
+    // int max_size=250; // in meters in theory
     m_minlat=minlat;
     m_minlon=minlon;
     int lat_slice=1;
@@ -246,6 +261,8 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon) {
         i++;
         lat+=m_lat_increment;
     }
+    latSectors=i-1;
+    lonSectors=j-1;
     double tB=get_timestamp_us();
     std::cout <<"[INFO] [OSMStore] Time for api call+file read in ms: " <<(tB-tA)/1000.0 <<std::endl;
 
@@ -269,7 +286,7 @@ void OSMStore::printAll() {
     fclose(fout);
 }
 
-osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon) {
+osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon, double distance) {
     osmium::object_id_type closestWay;
     double closestDist=2e10;
 
@@ -278,6 +295,8 @@ osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon) {
     point2d p(lat,lon);
     int i=std::floor((lat-m_minlat)/m_lat_increment);
     int j=std::floor((lon-m_minlon)/m_lon_increment);
+    if (i>latSectors) {i=latSectors;}
+    if (j>lonSectors) {j=lonSectors;}
     std::tuple<int,int> index(i,j);
 
     int counter=0;
@@ -286,7 +305,9 @@ osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon) {
         if (dist<closestDist) {
             closestDist=dist;
             closestWay=way.first;
-            if (dist<3) break;
+            // check if the distance is less than the width
+            // if distance is not 0 it means the check is "close to road" and not "on road"
+            if (dist<highways_info.at(way.first).width+distance) break;
         }
     }
 
@@ -317,6 +338,8 @@ bool OSMStore::checkHeadingMatchesRoad(double heading, double lat, double lon, o
 
     int i=std::floor((lat-m_minlat)/m_lat_increment);
     int j=std::floor((lon-m_minlon)/m_lon_increment);
+    if (i>latSectors) {i=latSectors;}
+    if (j>lonSectors) {j=lonSectors;}
     std::tuple<int,int> index(i,j);
     way_linestring way=m_highways_by_sector.at(index).at(highwayID);
 
@@ -380,6 +403,8 @@ bool OSMStore::checkIfPointInBuilding(double lat, double lon) {
     point2d p(lat,lon);
     int i=std::floor((lat-m_minlat)/m_lat_increment);
     int j=std::floor((lon-m_minlon)/m_lon_increment);
+    if (i>latSectors) {i=latSectors;}
+    if (j>lonSectors) {j=lonSectors;}
     std::tuple<int,int> index(i,j);
 
     int counter=0;
@@ -404,6 +429,27 @@ bool OSMStore::checkSpeedOverTypeLimit(double speed, osmium::object_id_type high
     bool retval=false;
     if (speed>highways_info.at(highwayID).maxSpeed) {
         retval=true;
+    }
+    return retval;
+}
+
+bool OSMStore::checkIfPointIsStop(double lat, double lon, bool isBusStop) {
+    bool retval=false;
+    point2d p(lat,lon);
+    if (isBusStop) {
+        for (auto bs:m_bus_stops) {
+            if (boost::geometry::distance(p,bs.second)<3) {
+                retval=true;
+                break;
+            }
+        }
+    } else {
+        for (auto ts:m_tram_stops) {
+            if (boost::geometry::distance(p,ts.second)<3) {
+                retval=true;
+                break;
+            }
+        }
     }
     return retval;
 }

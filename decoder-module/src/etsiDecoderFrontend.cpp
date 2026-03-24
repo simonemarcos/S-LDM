@@ -81,6 +81,10 @@ namespace etsiDecoder {
 			}
 
 			decoded_data.gnTimestamp = gndataIndication.SourcePV.TST;
+			decoded_data.gnLat = gndataIndication.SourcePV.latitude;
+			decoded_data.gnLon = gndataIndication.SourcePV.longitude;
+			decoded_data.gnSpeed = gndataIndication.SourcePV.speed;
+			decoded_data.gnHeading = gndataIndication.SourcePV.heading;
 
 			if(btpDataIndication.destPort == CA_PORT) {
 				decoded_data.type = ETSI_DECODED_CAM;

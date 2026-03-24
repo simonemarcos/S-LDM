@@ -275,10 +275,9 @@ Security::signatureCreation (const std::string& tbsData_hex, const std::string& 
 
 bool
 Security::signatureVerification (const std::string& tbsData_hex, const std::string& certificate_hex, const GNsgtrDC& signatureRS,const std::string& verifyKeyIndicator)
-{
-    // Convert hex string to bytes
-    std::vector<unsigned char> tbsData_bytes = hexStringToBytes (tbsData_hex);
-    std::vector<unsigned char> certificate_bytes = hexStringToBytes (certificate_hex);
+{    
+    std::vector<unsigned char> tbsData_bytes(tbsData_hex.begin(), tbsData_hex.end());
+    std::vector<unsigned char> certificate_bytes(certificate_hex.begin(), certificate_hex.end());
 
     // Compute SHA-256 hash
     unsigned char tbsData_hash[SHA256_DIGEST_LENGTH];
@@ -627,6 +626,7 @@ Security::extractSecurePacket (etsiDecoder::GNDataIndication_t &dataIndication, 
                 //ss <<c_hash[i];
                 m_digest += ss.str();
             }
+            certificateData.digest=m_digest;
         } else if (present3 == SignerIdentifier_PR_certificate) {
             isCertificate = true;
             std::string verificationKey;
@@ -664,9 +664,9 @@ Security::extractSecurePacket (etsiDecoder::GNDataIndication_t &dataIndication, 
                 };
 
                 // DIGEST CALCULATION
-                std::string certHex = asn1cpp::oer::encode (certDecoded);
-                std::vector<unsigned char> cer_bytes;//= hexStringToBytes(certHex);
-                for (unsigned char c:certHex) {
+                std::string certificateHex = asn1cpp::oer::encode (certDecoded);
+                std::vector<unsigned char> cer_bytes;//= hexStringToBytes(certificateHex);
+                for (unsigned char c:certificateHex) {
                     cer_bytes.emplace_back(c);
                 }
                 unsigned char c_hash[SHA256_DIGEST_LENGTH];
@@ -777,7 +777,7 @@ Security::extractSecurePacket (etsiDecoder::GNDataIndication_t &dataIndication, 
                 } // else if(signCertDecoded->present == etc...). Never present
                 secureDataPacket.content.signData.signerId.certificate.push_back(newCert);
 
-                //std::string certHex = asn1cpp::oer::encode (certDecoded);
+                std::string certHex = asn1cpp::oer::encode (certDecoded);
                 std::pair<std::string, std::string> pair = std::make_pair (verificationKey,certHex);
                 uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
                 m_receivedCertificates[timestamp] = pair;

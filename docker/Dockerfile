@@ -29,7 +29,8 @@ COPY . /home/sldm/SLDM
 # Install dependencies
 RUN apt-get update && \
     apt-get install -y apt-utils && \
-    apt-get install -y build-essential cmake cmake-curses-gui uuid-dev libssl-dev libsasl2-2 libsasl2-dev libsasl2-modules wget python3 libcpprest libcpprest-dev nodejs libgeographic-dev
+    apt-get install -y build-essential cmake cmake-curses-gui uuid-dev libssl-dev libsasl2-2 libsasl2-dev libsasl2-modules wget python3 libcpprest libcpprest-dev nodejs libgeographic-dev && \
+    apt-get install -y zlib1g-dev libboost-dev libprotozero-dev libbz2-dev libexpat1-dev libgps-dev libcurl4-openssl-dev libpcap-dev
 
 # Download Qpid Proton
 RUN wget https://archive.apache.org/dist/qpid/proton/0.35.0/qpid-proton-0.35.0.tar.gz && \

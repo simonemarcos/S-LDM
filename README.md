@@ -145,24 +145,25 @@ The repository contains the following folders:
 
 # Acknowledgments
 
-We currently have an accepted paper at IEEE VTC2022-Spring (19-22 June 2022), titled "*S-LDM: Server Local Dynamic Map for Vehicular Enhanced Collective Perception*".
-
 To acknowledge us in your publications, please refer to the following citation:
 ```
-F. Raviglione, C. M. R. Carletti, C. Casetti, F. Stoffella, G. M. Yilma and F. Visintainer, "S-LDM: Server Local Dynamic Map for Vehicular Enhanced Collective Perception," 2022 IEEE 95th Vehicular Technology Conference: (VTC2022-Spring), Helsinki, Finland, 2022, pp. 1-5, doi: 10.1109/VTC2022-Spring54318.2022.9860701.
+C.M. Risma Carletti, F. Raviglione, C. Casetti, F. Stoffella, G.M. Yilma, F. Visintainer, S-LDM: Server local dynamic map for 5G-based centralized enhanced collective perception, Vehicular Communications, Volume 49, 2024, 100819, ISSN 2214-2096, https://doi.org/10.1016/j.vehcom.2024.100819. (https://www.sciencedirect.com/science/article/pii/S2214209624000949).
 ```
 
 BibTeX format:
 ```
-@INPROCEEDINGS{S-LDM_paper_2022,
-  author={Raviglione, Francesco and Carletti, Carlos Mateo Risma and Casetti, Claudio and Stoffella, Filippo and Yilma, Girma M. and Visintainer, Filippo},
-  booktitle={2022 IEEE 95th Vehicular Technology Conference: (VTC2022-Spring)}, 
-  title={S-LDM: Server Local Dynamic Map for Vehicular Enhanced Collective Perception}, 
-  year={2022},
-  volume={},
-  number={},
-  pages={1-5},
-  doi={10.1109/VTC2022-Spring54318.2022.9860701}}
+@article{RISMACARLETTI2024100819,
+title = {S-LDM: Server local dynamic map for 5G-based centralized enhanced collective perception},
+journal = {Vehicular Communications},
+volume = {49},
+pages = {100819},
+year = {2024},
+issn = {2214-2096},
+doi = {https://doi.org/10.1016/j.vehcom.2024.100819},
+url = {https://www.sciencedirect.com/science/article/pii/S2214209624000949},
+author = {C.M. {Risma Carletti} and F. Raviglione and C. Casetti and F. Stoffella and G.M. Yilma and F. Visintainer},
+keywords = {Local dynamic map, MEC service, V2X, Vehicular networks, Centralized maneuver management, S-LDM, 5G, Field tests},
+}
 ```
 
 

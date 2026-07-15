@@ -230,7 +230,43 @@ Instead, to test it with the real path through the S-LDM, a custom solution has 
 
    > **Note on --gnn-pack-size and the training --cut:** this value must equal the --cut used at training (gnn/main.py --cut), not the full pack size of the dataset (sumo-dataset-generatom --pack-size / gnn/build.py -f). During training, --cut truncates each pack to its first cut frames so the model learns to predict the triggering event from a shorter observation window, effectively forecasting a near-future event. At inference, the S-LDM FrameBuffer accumulates exactly --gnn-pack-size frames and sends them to gnn/rcv.py, which reshapes them to (-1, frames_num, tot_fnum) with frames_num = --pack-size (rcv.py applies no CutFrames). To avoid a train/inference distribution shift, --gnn-pack-size must match the --cut used at training (e.g. if the dataset was generated with --pack-size 100 and the model trained with --cut 80, then --gnn-pack-size 80). See the [gnn/README](./gnn/README.md) for details on --cut.
 
+# Misbehaviour Detector
+The Misbehaviour Detector module currently provides only a basic Misbehaviour Detection Service, the MDS consists of simple data-centric checks on CAMs, VAMs, CPMs, and DENMs.
+The only introduced option for this module is `--disable-misbehaviour-detector` which simply makes the S-LDM avoid calling the MBD related functions.
 
+The MBD is a module that gets called by one of the AMQP clients when a message is received, the full implementation will first use the MDS to run all the checks on the message, then the MDS will provide the processed informations to the Misbehaviour Reporting Service that will futher process combined data to decide what action needs to be made (e.g. report the vehicle as misbehaving or not).
+
+In its current implementation the MBD is a single instance shared across all AMQP clients, after the checks are done the MBD simply returns to the AMQP client and as there is no MRS any misbehaviour will make the client discard the message, in the future this will change.
+
+The checks are mainly based on ETSI's proposals and cover different misbehaviour classes (e.g. plausibility, topology, etc.), while most of them don't require additional data outside of the received messages, topology checks and some DENM checks required the introduction of a small map module, based on OpenStreetMap, that downloads road and building informations needed for checks such as "Position not on road".
+
+For security layer validation another small module has been added to store old certificates and digests received from stations to prove their identities.
+
+For plausibility checks a fixed threshold is currently used, since this threshold may need to be tuned depending on the needs, a configuration file for the Misbehaviour Detector `MBDConfig.ini` is provided. The configuration presents a way to change those thresholds for all stationTypes or only for specific ones, in addition with some general customization options:
+- `UseHaversine`
+- `Tolerance`
+- `MaxTimeForConsecutive`
+- `IgnoreSecurity`
+- `MaxSectorSize`
+- `ToleranceMultiplierCPM`
+- `weatherAPIKey`
+- `DiscardOnMisbehaviour`
+
+A brief description of their use and effect is provided in the config file.
+
+The MDS provides 3 log files:
+- `misbehaviours_summary.txt` giving an overview of the failed checks made of the number of failures and a short description of the check.
+- `misbehaviours_log.csv` the verbose log of each failed check with the following fields numbered from 1 to 5:
+| Field                      | Description                                                                 |
+| --------------------------- | --------------------------------------------------------------------------- |
+| 1 | Message number, corresponding to the one in the evidence files, to allow checking the original message |
+| 2 | Message type, to identify if the message was a CAM/VAM/CPM/DENM |
+| 3 | Misbehaviour code, the internal code used for each misbehaviour |
+| 4 | Timestamp, the geonet timestamp of the message |
+| 5 | StationID, the stationID of the sender |
+| 6 | Additional fields, additional values like deltaTime, speed, etc. that vary from check to check and are useful for statistics |
+
+- `evidence.pcap` the received messages as evidence for the failed check, note that the messages received by the AMQP clients don't have the lower network layers, thus the ethernet header is forged.
 
 # Acknowledgments
 

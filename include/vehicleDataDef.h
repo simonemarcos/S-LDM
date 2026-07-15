@@ -112,11 +112,8 @@ namespace ldmmap {
 		//patch security
 		std::string certDigest;
 
-		//For geonet checks
-		int32_t gnLat;
-	    int32_t gnLon;
-		int16_t gnSpeed;
-		uint16_t gnHeading;
+		//map checks
+		int64_t wayId;
 	} vehicleData_t;
 }
 

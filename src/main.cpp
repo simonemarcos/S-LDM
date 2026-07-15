@@ -716,22 +716,6 @@ int main(int argc, char **argv) {
 		pthread_create(&nn_updater_tid,NULL,nnModelUpdater_callback,(void *) &nnMUP);
 	}
 
-	// Get the log file name from the options, if available, to enable log mode inside the AMQP client and the S-LDM modules
-	std::string logfile_name="";
-	if(options_string_len(sldm_opts.logfile_name)>0) {
-		logfile_name=std::string(options_string_pop(sldm_opts.logfile_name));
-		if(logfile_name!="stdout") {
-			time_t rawtime;
-			struct tm * timeinfo;
-  			char buffer [25] = {NULL};
-  			time (&rawtime);	
-  			timeinfo = localtime (&rawtime);
-  			strftime (buffer,25,"-%Y%m%d-%H:%M:%S",timeinfo);
-			logfile_name += buffer;
-		}
-
-	}
-
 	// Create an indicatorTriggerManager object (the same object will be then accessed by all the AMQP clients, when using more than one client)
 	indicatorTriggerManager itm(db_ptr,&sldm_opts);
 

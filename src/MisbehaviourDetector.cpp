@@ -44,7 +44,7 @@ const std::map<int,std::string> misbehaviourStringsStation={
 const std::map<int,std::string> misbehaviourStringsEvent={
 	{MisbehaviourDetector::mbdEventMisbehaviourCode_e::EMB_DISTANCE_DENM_CAM,"Distance between DENM and CAM too high"},
 	{MisbehaviourDetector::mbdEventMisbehaviourCode_e::EMB_ROAD_TYPE,"Road type in location container is not 'non-urban'"},
-	{MisbehaviourDetector::mbdEventMisbehaviourCode_e::EMB_EVENT_HISTORY_INC,"Event history from last DENM doesn't match with new DENM"},
+	//{MisbehaviourDetector::mbdEventMisbehaviourCode_e::EMB_EVENT_HISTORY_INC,"Event history from last DENM doesn't match with new DENM"},
 	{MisbehaviourDetector::mbdEventMisbehaviourCode_e::EMB_UNLIKELY_STATISTICS,"Unlikely event based on statistics"},
 	{MisbehaviourDetector::mbdEventMisbehaviourCode_e::EMB_UNLIKELY_NEARBY_VEHICLES,"Unlikely event based on nearby vehicles (density and average speed)"},
 	{MisbehaviourDetector::mbdEventMisbehaviourCode_e::EMB_REPORTER_SPEED,"Reporting station CAM speed too high"},
@@ -69,61 +69,111 @@ const std::map<int,std::string> misbehaviourStringsEvent={
 	{MisbehaviourDetector::mbdEventMisbehaviourCode_e::EMB_WEATHER_UNLIKELY_STATISTICS,"Unlikely weather based on statistics"},
 };
 
+pcap_dumper_t *log_pcap;
+FILE *log_summary;
+FILE *log_csv;
+
 uint64_t MisbehaviourDetector::processCAM(proton::binary message_bin, ldmmap::vehicleData_t vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
 
 	uint64_t MB_CODE=0, unavailables=0;
 	ldmmap::LDMMap::LDMMap_error_t db_retval;
 
-	//if (!certificateData.digest.empty()) {m_certStore_ptr->insert_or_assign(certificateData.digest,certificateData);}
-	// first check on security, for now the check is done but doesn't discard the packet if failed
-	switch (sec_retval) {
-		case Security::SECURITY_NO_SEC:
-			// no security so do nothing here
-			break;
-		case Security::SECURITY_VALID_CERTIFICATE:
-			m_certStore_ptr->insert_or_assign(certificateData.digest,certificateData);
-			break;
-		case Security::SECURITY_VERIFICATION_FAILED:
-			// left here for possible future changes
-			// at the moment this returnvalue makes geonet and then etsidecoder to return an error
-			// meaning the message is discarded before reaching here
-			break;
-		case Security::SECURITY_INVALID_CERTIFICATE:
-			// certificate verification failed
-			break;
-		case Security::SECURITY_DIGEST:
-			switch(m_certStore_ptr->isValid(certificateData.digest)) {
-				case e_DigestValid_retval::DIGEST_OK:
-					break;
-				case e_DigestValid_retval::DIGEST_EXPIRED:
-					break;
-				case e_DigestValid_retval::DIGEST_NOT_FOUND:
-					break;
-				default:
-					break;
-			}
-			break;
-		default:
-			break;
+	// Check for security, currently proceeds with the rest of the checks, this behaviour may change according to the reporting service needs
+	if (!m_opts.ignoreSecurity) {
+		switch (sec_retval) {
+			case Security::SECURITY_NO_SEC:
+				MB_CODE|=MB_CODE_CONV(MB_NO_SECURITY);
+				break;
+			case Security::SECURITY_VALID_CERTIFICATE:
+				if (!certificateData.digest.empty())
+					m_certStore_ptr->insert_or_assign(certificateData.digest,certificateData);
+				break;
+			case Security::SECURITY_VERIFICATION_FAILED:
+				// left here for possible future changes
+				// at the moment this returnvalue makes geonet and then etsidecoder to return an error
+				// meaning the message is discarded before reaching here
+				break;
+			case Security::SECURITY_INVALID_CERTIFICATE:
+				MB_CODE|=MB_CODE_CONV(MB_INVALID_CERTIFICATE);
+				break;
+			case Security::SECURITY_DIGEST:
+				switch(m_certStore_ptr->isValid(certificateData.digest)) {
+					case e_DigestValid_retval::DIGEST_OK:
+						break;
+					case e_DigestValid_retval::DIGEST_EXPIRED:
+						MB_CODE|=MB_CODE_CONV(MB_DIGEST_EXPIRED);
+						break;
+					case e_DigestValid_retval::DIGEST_NOT_FOUND:
+						MB_CODE|=MB_CODE_CONV(MB_DIGEST_NOT_FOUND);
+						break;
+					default:
+						break;
+				}
+				break;
+			default:
+				break;
+		}
 	}
 
-	//checks to be made here with decoded data
-	// MB_CODE=detectionFunction(...);
-	MB_CODE=0;
-	MB_CODE=individualCAMchecks(vehdata,unavailables);
+	MB_CODE|=individualCAMchecks(vehdata,unavailables);
 	
 	// if there are misbehaviours, update the logs
 	if (MB_CODE) {
+		uint64_t timestamp;
+		pcap_pkthdr pcap_hdr;
+		
+		static const u_char header[] = {
+			0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			0x89, 0x47
+		};
+		std::vector<u_char> binMessage(sizeof(header)+message_bin.size());
+
+		std::memcpy(binMessage.data(),header,sizeof(header));
+
+		pcap_hdr.caplen=message_bin.size()+sizeof(header);
+		pcap_hdr.len=pcap_hdr.caplen;
+		timestamp=vehdata.gnTimestamp;
+		pcap_hdr.ts.tv_sec=floor(timestamp/1000);
+		pcap_hdr.ts.tv_usec=(timestamp-pcap_hdr.ts.tv_sec*1000)*1000;
+
+		std::memcpy(binMessage.data()+sizeof(header), message_bin.data(), message_bin.size());
+
+		pcap_dump((u_char *) log_pcap, &pcap_hdr, binMessage.data());
+		msgNumber++;
+
+		if (MB_CODE >= 1<<mbdMisbehaviourCode_e::MB_BEACON_FREQ_INC) {
+			proton::binary last_message_bin=m_lastBinMessageCache.at(vehdata.stationID);
+			std::vector<u_char> lastBinMessage(sizeof(header)+last_message_bin.size());
+			
+			std::memcpy(lastBinMessage.data(),header,sizeof(header));
+			
+			// class 2 misbehaviours detected, write last message in evidence
+			pcap_hdr.caplen=last_message_bin.size()+sizeof(header);
+			pcap_hdr.len=pcap_hdr.caplen;
+			timestamp=m_lastMessageCache.at(vehdata.stationID).gnTimestamp;
+			pcap_hdr.ts.tv_sec=floor(timestamp/1000);
+			pcap_hdr.ts.tv_usec=(timestamp-pcap_hdr.ts.tv_sec*1000)*1000;
+
+			std::memcpy(lastBinMessage.data()+sizeof(header), last_message_bin.data(), last_message_bin.size());
+
+			pcap_dump((u_char *) log_pcap, &pcap_hdr, lastBinMessage.data());
+			msgNumber++;
+		}
+
+		for (auto p:misbehaviourStringsStation) {
+			if (MB_CODE&(1<<p.first)) {
+				misbehavioursCAM[p.first]++;
+			}
+		}
 		if (msgNumber%10==1 || msgNumber%10==2) { // update logs every 10 misbehaviours
+			pcap_dump_flush(log_pcap);
 			fflush(log_csv);
 
 			rewind(log_summary);
 			ftruncate(fileno(log_summary),0);
 			fprintf(log_summary,"CAM MISBEHAVIOURS:\n");
 			for (auto p:misbehaviourStringsStation) {
-				if (MB_CODE&(1<<p.first)) {
-					misbehavioursCAM[p.first]++;
-				}
 				fprintf(log_summary,"%d:\t\t%s\n",misbehavioursCAM[p.first],p.second.c_str());
 			}
 			fprintf(log_summary,"VAM MISBEHAVIOURS:\n");
@@ -139,97 +189,18 @@ uint64_t MisbehaviourDetector::processCAM(proton::binary message_bin, ldmmap::ve
 				fprintf(log_summary,"%d:\t\t%s\n",misbehavioursDENM[p.first],p.second.c_str());
 			}
 			fflush(log_summary);
-		} else { // else only update the counters
-			for (auto p:misbehaviourStringsStation) {
-				if (MB_CODE&(1<<p.first)) {
-					misbehavioursCAM[p.first]++;
-				}
-			}
 		}
-
-		pcap_dumper_t *pcap_log=pcap_dump_open_append(pcap_open_dead(DLT_EN10MB,1<<16),"./evidence.pcap");
-		uint64_t timestamp;
-		pcap_pkthdr pcap_hdr;
-		uint8_t *message_bin_buf;
-		
-		u_char *binMessage=(u_char *) malloc(message_bin.size()+14);
-		binMessage[0]=0xff;
-		binMessage[1]=0xff;
-		binMessage[2]=0xff;
-		binMessage[3]=0xff;
-		binMessage[4]=0xff;
-		binMessage[5]=0xff;
-		binMessage[6]=0x00;
-		binMessage[7]=0x00;
-		binMessage[8]=0x00;
-		binMessage[9]=0x00;
-		binMessage[10]=0x00;
-		binMessage[11]=0x00;
-		binMessage[12]=0x89;
-		binMessage[13]=0x47;
-		message_bin_buf=message_bin.data();
-		pcap_hdr.caplen=message_bin.size()+14;
-		pcap_hdr.len=pcap_hdr.caplen;
-		timestamp=vehdata.gnTimestamp;
-		pcap_hdr.ts.tv_sec=floor(timestamp/1000);
-		pcap_hdr.ts.tv_usec=(timestamp-pcap_hdr.ts.tv_sec*1000)*1000;
-		for (int i=0;i<message_bin.size();i++) {
-			binMessage[i+14]=(u_char) message_bin_buf[i];
-		}
-		pcap_dump((u_char *) pcap_log, &pcap_hdr, &binMessage[0]);
-		free(binMessage);
-		msgNumber++;
-		// for (int i=0;i<message_bin.size();i++) {
-		// 	std::printf("%02X ",message_bin_buf[i]);
-		// }
-
-		if (MB_CODE >= 1<<mbdMisbehaviourCode_e::MB_BEACON_FREQ_INC) {
-			proton::binary last_message_bin=m_lastBinMessageCache.at(vehdata.stationID);
-			u_char *lastBinMessage=(u_char *) malloc(last_message_bin.size()+14);
-			lastBinMessage[0]=0xff; lastBinMessage[1]=0xff;
-			lastBinMessage[2]=0xff; lastBinMessage[3]=0xff;
-			lastBinMessage[4]=0xff; lastBinMessage[5]=0xff;
-			lastBinMessage[6]=0x00; lastBinMessage[7]=0x00;
-			lastBinMessage[8]=0x00; lastBinMessage[9]=0x00;
-			lastBinMessage[10]=0x00; lastBinMessage[11]=0x00;
-			lastBinMessage[12]=0x89; lastBinMessage[13]=0x47;
-			// class 2 misbehaviours detected, write last message in evidence
-			message_bin_buf=last_message_bin.data();
-			pcap_hdr.caplen=last_message_bin.size()+14;
-			pcap_hdr.len=pcap_hdr.caplen;
-			timestamp=m_lastMessageCache.at(vehdata.stationID).gnTimestamp;
-			pcap_hdr.ts.tv_sec=floor(timestamp/1000);
-			pcap_hdr.ts.tv_usec=(timestamp-pcap_hdr.ts.tv_sec*1000)*1000;
-
-			for (int i=0;i<last_message_bin.size();i++) {
-				lastBinMessage[i+14]=(u_char) message_bin_buf[i];
-			}
-			pcap_dump((u_char *) pcap_log, &pcap_hdr, &lastBinMessage[0]);
-			free(lastBinMessage);
-			msgNumber++;
-		}
-
-		pcap_dump_close(pcap_log);
 	}
 
-	// Avoid reporting the same vehicle multiple times
-	// in future the check should be on the cause of report
-	// if different another report can and should be issued
-	if (MB_CODE) {
-		// report to be created here
-		m_already_reported_mutex.lock();
-		if(std::find(m_already_reported.begin(), m_already_reported.end(), vehdata.stationID) == m_already_reported.end()) {
-			//only mark as reported without sending the actual report for now
-			m_already_reported.insert(vehdata.stationID);
-		} else {
-			
-		}
-		m_already_reported_mutex.unlock();
-	} else {
-	}
+	MB_CODE&=MB_CODE_CLEAR(MB_NOT_ON_ROAD);
+	MB_CODE&=MB_CODE_CLEAR(MB_INSIDE_BUILDING);
+	MB_CODE&=MB_CODE_CLEAR(MB_HEADING_NOT_FOLLOWING_ROAD);
+	MB_CODE&=MB_CODE_CLEAR(MB_SPEED_OVER_ROAD_LIMIT);
 
-	m_lastMessageCache.insert_or_assign(vehdata.stationID,vehdata);
-	m_lastBinMessageCache.insert_or_assign(vehdata.stationID,message_bin);
+	if (!m_opts.discardOnMisbehaviour || !MB_CODE) {
+		m_lastMessageCache.insert_or_assign(vehdata.stationID,vehdata);
+		m_lastBinMessageCache.insert_or_assign(vehdata.stationID,message_bin);
+	}
 	return MB_CODE;
 }
 
@@ -238,13 +209,95 @@ uint64_t MisbehaviourDetector::processVAM(proton::binary message_bin, ldmmap::ve
 	uint64_t MB_CODE=0, unavailables=0;
 	ldmmap::LDMMap::LDMMap_error_t db_retval;
 
-	//checks to be made here with decoded data
-	// MB_CODE=detectionFunction(...);
-	MB_CODE=0;
-	MB_CODE=individualVAMchecks(vehdata,unavailables);
+	// Check for security, currently proceeds with the rest of the checks, this behaviour may change according to the reporting service needs
+	if (!m_opts.ignoreSecurity) {
+		switch (sec_retval) {
+			case Security::SECURITY_NO_SEC:
+				MB_CODE|=MB_CODE_CONV(MB_NO_SECURITY);
+				break;
+			case Security::SECURITY_VALID_CERTIFICATE:
+				if (!certificateData.digest.empty())
+					m_certStore_ptr->insert_or_assign(certificateData.digest,certificateData);
+				break;
+			case Security::SECURITY_VERIFICATION_FAILED:
+				// left here for possible future changes
+				// at the moment this returnvalue makes geonet and then etsidecoder to return an error
+				// meaning the message is discarded before reaching here
+				break;
+			case Security::SECURITY_INVALID_CERTIFICATE:
+				MB_CODE|=MB_CODE_CONV(MB_INVALID_CERTIFICATE);
+				break;
+			case Security::SECURITY_DIGEST:
+				switch(m_certStore_ptr->isValid(certificateData.digest)) {
+					case e_DigestValid_retval::DIGEST_OK:
+						break;
+					case e_DigestValid_retval::DIGEST_EXPIRED:
+						MB_CODE|=MB_CODE_CONV(MB_DIGEST_EXPIRED);
+						break;
+					case e_DigestValid_retval::DIGEST_NOT_FOUND:
+						MB_CODE|=MB_CODE_CONV(MB_DIGEST_NOT_FOUND);
+						break;
+					default:
+						break;
+				}
+				break;
+			default:
+				break;
+		}
+	}
+
+	MB_CODE|=individualVAMchecks(vehdata,unavailables);
 	
 	if (MB_CODE) {
+		uint64_t timestamp;
+		pcap_pkthdr pcap_hdr;
+		
+		static const u_char header[] = {
+			0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			0x89, 0x47
+		};
+		std::vector<u_char> binMessage(sizeof(header)+message_bin.size());
+
+		std::memcpy(binMessage.data(),header,sizeof(header));
+
+		pcap_hdr.caplen=message_bin.size()+sizeof(header);
+		pcap_hdr.len=pcap_hdr.caplen;
+		timestamp=vehdata.gnTimestamp;
+		pcap_hdr.ts.tv_sec=floor(timestamp/1000);
+		pcap_hdr.ts.tv_usec=(timestamp-pcap_hdr.ts.tv_sec*1000)*1000;
+
+		std::memcpy(binMessage.data()+sizeof(header), message_bin.data(), message_bin.size());
+
+		pcap_dump((u_char *) log_pcap, &pcap_hdr, binMessage.data());
+		msgNumber++;
+
+		if (MB_CODE >= 1<<mbdMisbehaviourCode_e::MB_BEACON_FREQ_INC) {
+			proton::binary last_message_bin=m_lastBinMessageCache.at(vehdata.stationID);
+			std::vector<u_char> lastBinMessage(sizeof(header)+last_message_bin.size());
+			
+			std::memcpy(lastBinMessage.data(),header,sizeof(header));
+			
+			// class 2 misbehaviours detected, write last message in evidence
+			pcap_hdr.caplen=last_message_bin.size()+sizeof(header);
+			pcap_hdr.len=pcap_hdr.caplen;
+			timestamp=m_lastMessageCache.at(vehdata.stationID).gnTimestamp;
+			pcap_hdr.ts.tv_sec=floor(timestamp/1000);
+			pcap_hdr.ts.tv_usec=(timestamp-pcap_hdr.ts.tv_sec*1000)*1000;
+
+			std::memcpy(lastBinMessage.data()+sizeof(header), last_message_bin.data(), last_message_bin.size());
+
+			pcap_dump((u_char *) log_pcap, &pcap_hdr, lastBinMessage.data());
+			msgNumber++;
+		}
+
+		for (auto p:misbehaviourStringsStation) {
+			if (MB_CODE&(1<<p.first)) {
+				misbehavioursVAM[p.first]++;
+			}
+		}
 		if (msgNumber%10==1 || msgNumber%10==2) { // update logs every 10 misbehaviours
+			pcap_dump_flush(log_pcap);
 			fflush(log_csv);
 
 			rewind(log_summary);
@@ -255,9 +308,6 @@ uint64_t MisbehaviourDetector::processVAM(proton::binary message_bin, ldmmap::ve
 			}
 			fprintf(log_summary,"VAM MISBEHAVIOURS:\n");
 			for (auto p:misbehaviourStringsStation) {
-				if (MB_CODE&(1<<p.first)) {
-					misbehavioursVAM[p.first]++;
-				}
 				fprintf(log_summary,"%d:\t\t%s\n",misbehavioursVAM[p.first],p.second.c_str());
 			}
 			fprintf(log_summary,"CPM MISBEHAVIOURS:\n");
@@ -269,31 +319,12 @@ uint64_t MisbehaviourDetector::processVAM(proton::binary message_bin, ldmmap::ve
 				fprintf(log_summary,"%d:\t\t%s\n",misbehavioursDENM[p.first],p.second.c_str());
 			}
 			fflush(log_summary);
-		} else { // else only update the counters
-			for (auto p:misbehaviourStringsStation) {
-				if (MB_CODE&(1<<p.first)) {
-					misbehavioursVAM[p.first]++;
-				}
-			}
 		}
 	}
 
-	// Avoid reporting the same vehicle multiple times
-	// in future the check should be on the cause of report
-	// if different another report can and should be issued
-	if (MB_CODE) {
-		// report to be created here
-		m_already_reported_mutex.lock();
-		if(std::find(m_already_reported.begin(), m_already_reported.end(), vehdata.stationID) == m_already_reported.end()) {
-			//only mark as reported without sending the actual report for now
-			m_already_reported.insert(vehdata.stationID);
-		} else {
-			
-		}
-		m_already_reported_mutex.unlock();
-	} else {
+	if (!m_opts.discardOnMisbehaviour || !MB_CODE) {
+		m_lastMessageCache.insert_or_assign(vehdata.stationID,vehdata);
 	}
-	m_lastMessageCache.insert_or_assign(vehdata.stationID,vehdata);
 	return MB_CODE;
 }
 
@@ -302,32 +333,93 @@ uint64_t MisbehaviourDetector::processCPM(proton::binary message_bin, std::vecto
 	uint64_t MB_CODE=0, unavailables=0;
 	ldmmap::LDMMap::LDMMap_error_t db_retval;
 
-	//checks to be made here with decoded data
-	// MB_CODE=detectionFunction(...);
-	MB_CODE=0;
-	MB_CODE=individualCPMchecks(PO_vec,unavailables);
-	
-	// Avoid reporting the same vehicle multiple times
-	// in future the check should be on the cause of report
-	// if different another report can and should be issued
-	if (MB_CODE) {
-		// report to be created here
-		m_already_reported_mutex.lock();
-		//using first element (at least one present) to retrieve CPM sender StationID
-		if(std::find(m_already_reported.begin(), m_already_reported.end(), PO_vec.front().perceivedBy) == m_already_reported.end()) {
-			//only mark as reported without sending the actual report for now
-			m_already_reported.insert(PO_vec.front().perceivedBy);
-		} else {
-			
+	// Check for security, currently proceeds with the rest of the checks, this behaviour may change according to the reporting service needs
+	if (!m_opts.ignoreSecurity) {
+		switch (sec_retval) {
+			case Security::SECURITY_NO_SEC:
+				MB_CODE|=MB_CODE_CONV(MB_NO_SECURITY);
+				break;
+			case Security::SECURITY_VALID_CERTIFICATE:
+				if (!certificateData.digest.empty())
+					m_certStore_ptr->insert_or_assign(certificateData.digest,certificateData);
+				break;
+			case Security::SECURITY_VERIFICATION_FAILED:
+				// left here for possible future changes
+				// at the moment this returnvalue makes geonet and then etsidecoder to return an error
+				// meaning the message is discarded before reaching here
+				break;
+			case Security::SECURITY_INVALID_CERTIFICATE:
+				MB_CODE|=MB_CODE_CONV(MB_INVALID_CERTIFICATE);
+				break;
+			case Security::SECURITY_DIGEST:
+				switch(m_certStore_ptr->isValid(certificateData.digest)) {
+					case e_DigestValid_retval::DIGEST_OK:
+						break;
+					case e_DigestValid_retval::DIGEST_EXPIRED:
+						MB_CODE|=MB_CODE_CONV(MB_DIGEST_EXPIRED);
+						break;
+					case e_DigestValid_retval::DIGEST_NOT_FOUND:
+						MB_CODE|=MB_CODE_CONV(MB_DIGEST_NOT_FOUND);
+						break;
+					default:
+						break;
+				}
+				break;
+			default:
+				break;
 		}
-		m_already_reported_mutex.unlock();
-	} else {
 	}
-	for (auto PO:PO_vec) {
-		m_lastMessageCache.insert_or_assign(PO.stationID,PO);
-	}
+
+	MB_CODE|=individualCPMchecks(PO_vec,unavailables);
 	
 	if (MB_CODE) {
+		uint64_t timestamp;
+		pcap_pkthdr pcap_hdr;
+		
+		static const u_char header[] = {
+			0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			0x89, 0x47
+		};
+		std::vector<u_char> binMessage(sizeof(header)+message_bin.size());
+
+		std::memcpy(binMessage.data(),header,sizeof(header));
+
+		pcap_hdr.caplen=message_bin.size()+sizeof(header);
+		pcap_hdr.len=pcap_hdr.caplen;
+		timestamp=PO_vec.front().gnTimestamp;
+		pcap_hdr.ts.tv_sec=floor(timestamp/1000);
+		pcap_hdr.ts.tv_usec=(timestamp-pcap_hdr.ts.tv_sec*1000)*1000;
+
+		std::memcpy(binMessage.data()+sizeof(header), message_bin.data(), message_bin.size());
+
+		pcap_dump((u_char *) log_pcap, &pcap_hdr, binMessage.data());
+		msgNumber++;
+
+		if (MB_CODE >= 1<<mbdMisbehaviourCode_e::MB_BEACON_FREQ_INC) {
+			proton::binary last_message_bin=m_lastBinMessageCache.at(certificateData.stationID);
+			std::vector<u_char> lastBinMessage(sizeof(header)+last_message_bin.size());
+			
+			std::memcpy(lastBinMessage.data(),header,sizeof(header));
+			
+			// class 2 misbehaviours detected, write last message in evidence
+			pcap_hdr.caplen=last_message_bin.size()+sizeof(header);
+			pcap_hdr.len=pcap_hdr.caplen;
+			timestamp=m_lastMessageCache.at(certificateData.stationID).gnTimestamp;
+			pcap_hdr.ts.tv_sec=floor(timestamp/1000);
+			pcap_hdr.ts.tv_usec=(timestamp-pcap_hdr.ts.tv_sec*1000)*1000;
+
+			std::memcpy(lastBinMessage.data()+sizeof(header), last_message_bin.data(), last_message_bin.size());
+
+			pcap_dump((u_char *) log_pcap, &pcap_hdr, lastBinMessage.data());
+			msgNumber++;
+		}
+
+		for (auto p:misbehaviourStringsStation) {
+			if (MB_CODE&(1<<p.first)) {
+				misbehavioursCPM[p.first]++;
+			}
+		}
 		if (msgNumber%10==1 || msgNumber%10==2) { // update logs every 10 misbehaviours
 			fflush(log_csv);
 
@@ -343,9 +435,6 @@ uint64_t MisbehaviourDetector::processCPM(proton::binary message_bin, std::vecto
 			}
 			fprintf(log_summary,"CPM MISBEHAVIOURS:\n");
 			for (auto p:misbehaviourStringsStation) {
-				if (MB_CODE&(1<<p.first)) {
-					misbehavioursCPM[p.first]++;
-				}
 				fprintf(log_summary,"%d:\t\t%s\n",misbehavioursCPM[p.first],p.second.c_str());
 			}
 			fprintf(log_summary,"DENM MISBEHAVIOURS:\n");
@@ -353,15 +442,14 @@ uint64_t MisbehaviourDetector::processCPM(proton::binary message_bin, std::vecto
 				fprintf(log_summary,"%d:\t\t%s\n",misbehavioursDENM[p.first],p.second.c_str());
 			}
 			fflush(log_summary);
-		} else { // else only update the counters
-			for (auto p:misbehaviourStringsStation) {
-				if (MB_CODE&(1<<p.first)) {
-					misbehavioursCPM[p.first]++;
-				}
-			}
 		}
 	}
-
+	
+	if (!m_opts.discardOnMisbehaviour || !MB_CODE) {
+		for (auto PO:PO_vec) {
+			m_lastMessageCache.insert_or_assign(PO.stationID,PO);
+		}
+	}
 	return MB_CODE;
 }
 
@@ -371,17 +459,18 @@ void MisbehaviourDetector::notifyOpTermination(uint64_t stationID) {
 	m_already_reported_mutex.unlock();
 }
 
-void sigintHandler(int sig_num) {
-	fflush(NULL);
-    printf("\nGraceful termination.\n");
-    exit(0);
-} 
+void sigIntHandler(int sig) {
+	fflush(log_summary);
+	fflush(log_csv);
+	pcap_dump_flush(log_pcap);
+	exit(0);
+}
 
 void MisbehaviourDetector::Init(double minlat, double minlon, double maxlat, double maxlon) {
 	
 	log_csv=fopen("misbehaviours_log.csv","w");
 	log_summary=fopen("misbehaviours_summary.txt","w");
-	signal(SIGINT, sigintHandler);
+	signal(SIGINT, sigIntHandler);
 
 	int stationTypes[]={
 		ldmmap::StationType_LDM_bus,
@@ -442,11 +531,12 @@ void MisbehaviourDetector::Init(double minlat, double minlon, double maxlat, dou
 	m_opts.cpmToleranceMultiplier=reader.GetReal("OPTIONS","ToleranceMultiplierCPM",1.5);
 	m_opts.weatherAPIKey=reader.GetString("OPTIONS","weatherAPIKey","");
 	weatherTimestamp=get_timestamp_s()-12600; // since there's no weather information at the start, the weatherTimestamp is set to 3.5 hours before server start allowing for a first bypass of the time constraint on next api call
-	
+	m_opts.discardOnMisbehaviour=reader.GetBoolean("OPTIONS","DiscardOnMisbehaviour",false);
+
 	// Default thresholds to be used if not specified in MBDConfig.ini
 	double maxSpeedGeneral=reader.GetInteger("GENERAL_THRESHOLDS","MaxSpeed",380);
 	double maxAccelerationGeneral=reader.GetInteger("GENERAL_THRESHOLDS","MaxAcceleration",20);
-	double maxBrakingGeneral=reader.GetInteger("GENERAL_THRESHOLDS","MaxBraking",-50);
+	double minAccelerationGeneral=reader.GetInteger("GENERAL_THRESHOLDS","MinAcceleration",-50);
 	double maxCurvatureGeneral=reader.GetInteger("GENERAL_THRESHOLDS","MaxCurvature",50);
 	double maxYawRateGeneral=reader.GetInteger("GENERAL_THRESHOLDS","MaxYawRate",50);
 
@@ -465,11 +555,11 @@ void MisbehaviourDetector::Init(double minlat, double minlon, double maxlat, dou
 		double maxAcceleration=reader.GetInteger(section,"MaxAcceleration",maxAccelerationGeneral);
 		maxAccelerations.insert(std::pair<int,double>(stationType,maxAcceleration));
 		
-		double maxBraking=reader.GetInteger(section,"MaxBraking",maxBrakingGeneral);
-		maxBrakings.insert(std::pair<int,double>(stationType,maxBraking));
+		double minAcceleration=reader.GetInteger(section,"MinAcceleration",minAccelerationGeneral);
+		minAccelerations.insert(std::pair<int,double>(stationType,minAcceleration));
 
 		double maxCurvature=reader.GetInteger(section,"MaxCurvature",maxCurvatureGeneral);
-		maxCurvatures.insert(std::pair<int,double>(stationType,maxCurvature));
+		maxLateralAcceleration.insert(std::pair<int,double>(stationType,maxCurvature));
 		
 		double maxYawRate=reader.GetInteger(section,"MaxYawRate",maxYawRateGeneral);
 		maxYawRates.insert(std::pair<int,double>(stationType,maxYawRate));
@@ -483,14 +573,14 @@ void MisbehaviourDetector::Init(double minlat, double minlon, double maxlat, dou
 	misbehavioursCPM.resize(64);
 	misbehavioursDENM.resize(64);
 	msgNumber=1;
-	pcap_dumper_t *dump=pcap_dump_open(pcap_open_dead(DLT_EN10MB,1<<16),"./evidence.pcap");
-	pcap_dump_close(dump);
+	log_pcap=pcap_dump_open(pcap_open_dead(DLT_EN10MB,1<<16),"./evidence.pcap");
 }
 
-uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables, double tolMult) {
+uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables, int msgType) {
 	uint64_t MB_CODE=0;
 	ldmmap::vehicleData_t lastMessage;
 	bool lastMessagePresent=false;
+	double tolMult=msgType==CAM?1:m_opts.cpmToleranceMultiplier;
 
 	if (m_lastMessageCache.find(vehdata.stationID)!=m_lastMessageCache.end()) {
 		lastMessagePresent=true;
@@ -507,7 +597,7 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 
 	if (vehdata.speed_ms!=ldmmap::e_DataUnavailableValue::speed) {
 		if (vehdata.speed_ms>maxSpeeds[vehdata.stationType]) {
-			fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f\n",MB_SPEED_IMP,msgNumber,vehdata.gnTimestamp,vehdata.stationID,vehdata.speed_ms,maxSpeeds[vehdata.stationType]);
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"speed=%f;maxSpeed=%f\"\n",msgNumber,msgType,MB_SPEED_IMP,vehdata.gnTimestamp,vehdata.stationID,vehdata.speed_ms,maxSpeeds[vehdata.stationType]);
 			MB_CODE|=MB_CODE_CONV(MB_SPEED_IMP);
 		}
 	} else {
@@ -519,7 +609,7 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 	if (vehdata.driveDirection!=ldmmap::e_DataUnavailableValue::driveDirection) {
 		if (vehdata.speed_ms!=ldmmap::e_DataUnavailableValue::speed) {
 			if (vehdata.driveDirection==DriveDirection_backward && vehdata.speed_ms>(30/3.6)) {
-				fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f\n",MB_DIRECTION_SPEED_IMP,msgNumber,vehdata.gnTimestamp,vehdata.stationID,vehdata.speed_ms,vehdata.driveDirection);
+				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"speed=%f;driveDirection=%f\"\n",msgNumber,msgType,MB_DIRECTION_SPEED_IMP,vehdata.gnTimestamp,vehdata.stationID,vehdata.speed_ms,vehdata.driveDirection);
 				MB_CODE|=MB_CODE_CONV(MB_DIRECTION_SPEED_IMP);
 			}
 		}
@@ -530,26 +620,26 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 	// ------- PLAUSIBLE MAX ACCELERATION CHECK -------
 
 	if (vehdata.longitudinalAcceleration!=ldmmap::e_DataUnavailableValue::longitudinalAcceleration) {
-		if (vehdata.longitudinalAcceleration>=0) {
-			if (vehdata.longitudinalAcceleration>maxAccelerations[vehdata.stationType]) {
-				fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f\n",MB_ACCELERATION_IMP,msgNumber,vehdata.gnTimestamp,vehdata.stationID,vehdata.longitudinalAcceleration,maxAccelerations[vehdata.stationType]);
-				MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_IMP);
-			}
-		} else {
-			if (vehdata.longitudinalAcceleration<maxBrakings[vehdata.stationType]) {
-				fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f\n",MB_ACCELERATION_IMP,msgNumber,vehdata.gnTimestamp,vehdata.stationID,vehdata.longitudinalAcceleration,maxBrakings[vehdata.stationType]);
-				MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_IMP);
-			}
+		//accelerating
+		if (vehdata.longitudinalAcceleration>maxAccelerations[vehdata.stationType]) {
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"acceleration=%f;maxAcceleration=%f\"\n",msgNumber,msgType,MB_ACCELERATION_IMP,vehdata.gnTimestamp,vehdata.stationID,vehdata.longitudinalAcceleration,maxAccelerations[vehdata.stationType]);
+			MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_IMP);
+		}
+		//braking
+		if (vehdata.longitudinalAcceleration<minAccelerations[vehdata.stationType]) {
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"acceleration=%f;minAcceleration=%f\"\n",msgNumber,msgType,MB_ACCELERATION_IMP,vehdata.gnTimestamp,vehdata.stationID,vehdata.longitudinalAcceleration,minAccelerations[vehdata.stationType]);
+			MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_IMP);
 		}
 	} else {
 		unavailables|=MB_CODE_CONV(UNAV_ACCELERATION);
 	}
 
-	// ------- PLAUSIBLE MAX CURVATURE CHECK -------
-
+	// ------- PLAUSIBLE MAX LATERAL ACCELERATION CHECK (FROM CURVATURE) -------
+	const double curvaturelateralAcceleration=pow(vehdata.speed_ms,2)*vehdata.curvature;
 	if (vehdata.curvature!=ldmmap::e_DataUnavailableValue::curvature) {
-		if (vehdata.curvature>maxCurvatures[vehdata.stationType]) {
-			fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f\n",MB_CURVATURE_IMP,msgNumber,vehdata.gnTimestamp,vehdata.stationID,vehdata.curvature,maxCurvatures[vehdata.stationType]);
+		if (curvaturelateralAcceleration>maxLateralAcceleration[vehdata.stationType]) {
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"lateralAcceleration=%f;maxLateralAcceleration=%f\"\n",
+				msgNumber,msgType,MB_CURVATURE_IMP,vehdata.gnTimestamp,vehdata.stationID,curvaturelateralAcceleration,maxLateralAcceleration[vehdata.stationType]);
 			MB_CODE|=MB_CODE_CONV(MB_CURVATURE_IMP);
 		}
 	} else {
@@ -560,7 +650,7 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 
 	if (vehdata.yawRate!=ldmmap::e_DataUnavailableValue::yawRate) {
 		if (vehdata.yawRate>maxYawRates[vehdata.stationType]) {
-			fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f\n",MB_YAW_RATE_IMP,msgNumber,vehdata.gnTimestamp,vehdata.stationID,vehdata.yawRate,maxYawRates[vehdata.stationType]);
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"yawRate=%f;maxYawRate=%f\"\n",msgNumber,msgType,MB_YAW_RATE_IMP,vehdata.gnTimestamp,vehdata.stationID,vehdata.yawRate,maxYawRates[vehdata.stationType]);
 			MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_IMP);
 		}
 	} else {
@@ -568,36 +658,44 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 	}
 	}
 
+
+	double messageDeltaTime; // seconds
 	// ------- CLASS 2 CHECKS -------
 	if (lastMessagePresent) {
 
 		// ------- BEACON FREQUENCY CHECK -------
-
-		double messageDeltaTime=(vehdata.camTimestamp-lastMessage.camTimestamp)/1000.0; // in seconds
+		messageDeltaTime=(vehdata.camTimestamp-lastMessage.camTimestamp)/1000.0;// in seconds
 		if (messageDeltaTime<0) {
 			// messageDeltaTime+=429496.7296; // for gnTimestamp divided by 1000 to be in seconds
 			messageDeltaTime+=65.536; // for camTimestamp divided by 1000 to be in seconds
 		}
 		if (messageDeltaTime>m_opts.maxTimeForConsecutive) {
-			// messages too far in time
+			// Messages are too far in time for the used configuration, avoid checking any class 2
+			// reuse lastMessagePresent set to false to pretend there is no last message (potentially a second variable could be used but its not needed in the current scenario)
 			MB_CODE|=MB_CODE_CONV(MB_BEACON_FREQ_LOW);
-			return MB_CODE;
+			lastMessagePresent=false;
 		}
 		if (messageDeltaTime<0.095) {
-			fprintf(log_csv,"%d,%d,%lu,%lu,%f,%li\n",MB_BEACON_FREQ_INC,msgNumber,vehdata.camTimestamp,vehdata.stationID,messageDeltaTime,lastMessage.camTimestamp);
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;lastTimestamp=%li\"\n",msgNumber,msgType,MB_BEACON_FREQ_INC,vehdata.camTimestamp,vehdata.stationID,messageDeltaTime,lastMessage.camTimestamp);
 			MB_CODE|=MB_CODE_CONV(MB_BEACON_FREQ_INC);
 		}
 
-		// ------- POSITION CHANGE SPEED CHECK -------
+	}
 
+	// Class 2 checks only done if there is a last message and it's recent enough
+	if (lastMessagePresent) {
+		
 		const double radiansFactor=M_PI/180;
 		const double dLat = (vehdata.lat - lastMessage.lat) * radiansFactor;
 		const double dLon = (vehdata.lon - lastMessage.lon) * radiansFactor;
 		const double earthRadius = 6371000; //in meters
-		double averageSpeed;
-		double messageHeadingYawRate;
+		double averageSpeed; // average of the speeds of the two messages
+		double messageHeadingYawRate; // yaw rate between the two messages (variation of heading over time)
 		if (vehdata.speed_ms!=ldmmap::e_DataUnavailableValue::speed && lastMessage.speed_ms!=ldmmap::e_DataUnavailableValue::speed) {
-			double messagePositionDistance;
+			
+			// ------- POSITION CHANGE SPEED CHECK -------
+
+			double messagePositionDistance; // distance between the two messages
 			if (m_opts.useHaversineDistance) {
 				double a = pow(sin(dLat / 2), 2) + pow(sin(dLon / 2), 2) * cos(lastMessage.lat*radiansFactor) * cos(vehdata.lat*radiansFactor);
 				double c = 2 * asin(sqrt(a));
@@ -605,52 +703,56 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 			} else {
 				messagePositionDistance=earthRadius*sqrt(pow(dLat, 2) + pow(dLon*cos(lastMessage.lat*radiansFactor), 2));
 			}
-			const double messagePositionSpeed=messagePositionDistance/messageDeltaTime;
+			const double messagePositionSpeed=messagePositionDistance/messageDeltaTime; //
+
 			// Average speed needed to travel the "message distance" is implausible
 			if (messagePositionSpeed>maxSpeeds[vehdata.stationType]) {
-				fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f,%f\n",
-					MB_POSITION_SPEED_IMP,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messagePositionDistance,messagePositionSpeed,maxSpeeds[vehdata.stationType]);
+				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;messageDistance=%f;calculatedSpeed=%f;maxSpeed=%f\"\n",
+					msgNumber,msgType,MB_POSITION_SPEED_IMP,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messagePositionDistance,messagePositionSpeed,maxSpeeds[vehdata.stationType]);
 				MB_CODE|=MB_CODE_CONV(MB_POSITION_SPEED_IMP);
 			}
 			averageSpeed=(vehdata.speed_ms+lastMessage.speed_ms)/2.0;
 			// Calculated average speed doesn't match with average speed of the CAMs
 			if (messagePositionSpeed>averageSpeed*(1+m_opts.tolerance*tolMult) || messagePositionSpeed<averageSpeed*(1-m_opts.tolerance*tolMult)) {
-				fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f,%f\n",
-					MB_POSITION_SPEED_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messagePositionDistance,messagePositionSpeed,averageSpeed);
+				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;messageDistance=%f;calculatedSpeed=%f;averageSpeed=%f\"\n",
+					msgNumber,msgType,MB_POSITION_SPEED_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messagePositionDistance,messagePositionSpeed,averageSpeed);
 				MB_CODE|=MB_CODE_CONV(MB_POSITION_SPEED_INC);
 			}
 
 			// ------- SPEED CHANGE ACCELERATION CHECK -------
+
 			if (vehdata.longitudinalAcceleration!=ldmmap::e_DataUnavailableValue::longitudinalAcceleration && lastMessage.longitudinalAcceleration!=ldmmap::e_DataUnavailableValue::longitudinalAcceleration) {
 				const double messageSpeedAcceleration=(vehdata.speed_ms-lastMessage.speed_ms)/messageDeltaTime;
 				const double averageAcceleration=(vehdata.longitudinalAcceleration+lastMessage.longitudinalAcceleration)/2.0;
-				if (messageSpeedAcceleration>0) {
+				if (messageSpeedAcceleration>=0) {
 					// Average acceleration needed to reach message speed is implausible
 					if (messageSpeedAcceleration>maxAccelerations[vehdata.stationType]) {
-						fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f\n",
-							MB_SPEED_ACCELERATION_IMP,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageSpeedAcceleration,maxAccelerations[vehdata.stationType]);
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedAcceleration=%f;maxAcceleration=%f\"\n",
+							msgNumber,msgType,MB_SPEED_ACCELERATION_IMP,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageSpeedAcceleration,maxAccelerations[vehdata.stationType]);
 						MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_IMP);
 					}
 	
 					// Calculated average acceleration doesn't match with average acceleration of the CAMs
 					if (messageSpeedAcceleration>averageAcceleration*(1+m_opts.tolerance*tolMult) || messageSpeedAcceleration<averageSpeed*(1-m_opts.tolerance*tolMult)) {
-						if (abs(messageSpeedAcceleration-averageAcceleration)>5) {
-							fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f\n",
-								MB_SPEED_ACCELERATION_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageSpeedAcceleration,averageAcceleration);
+						if (fabs(messageSpeedAcceleration-averageAcceleration)>5) {
+							fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedAcceleration=%f;averageAcceleration=%f\"\n",
+								msgNumber,msgType,MB_SPEED_ACCELERATION_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageSpeedAcceleration,averageAcceleration);
 							MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_INC);
 						}
 					}
 				} else {
 					// Average acceleration needed to reach message speed is implausible
-					if (messageSpeedAcceleration<maxBrakings[vehdata.stationType]) {
+					if (messageSpeedAcceleration<minAccelerations[vehdata.stationType]) {
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedAcceleration=%f;minAcceleration=%f\"\n",
+							msgNumber,msgType,MB_SPEED_ACCELERATION_IMP,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageSpeedAcceleration,minAccelerations[vehdata.stationType]);
 						MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_IMP);
 					}
 	
 					// Calculated average acceleration doesn't match with average acceleration of the CAMs
 					if (messageSpeedAcceleration<averageAcceleration*(1+m_opts.tolerance*tolMult) || messageSpeedAcceleration>averageSpeed*(1-m_opts.tolerance*tolMult)) {
-						if (abs(messageSpeedAcceleration-averageAcceleration)>5) {
-							fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f\n",
-								MB_SPEED_ACCELERATION_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageSpeedAcceleration,averageAcceleration);
+						if (fabs(messageSpeedAcceleration-averageAcceleration)>5) {
+							fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedAcceleration=%f;averageAcceleration=%f\"\n",
+								msgNumber,msgType,MB_SPEED_ACCELERATION_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageSpeedAcceleration,averageAcceleration);
 							MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_INC);
 						}
 					}
@@ -668,34 +770,25 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 			}
 			// Calculated average heading doesn't match with average heading of the CAMs
 			if (messageHeading>averageHeading*(1+m_opts.tolerance*tolMult) || messageHeading<averageHeading*(1-m_opts.tolerance*tolMult)) {
-				fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f\n",
-					MB_POSITION_HEADING_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageHeading,averageHeading);
+				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"calculatedHeading=%f;averageHeading=%f\"\n",
+					msgNumber,msgType,MB_POSITION_HEADING_INC,vehdata.gnTimestamp,vehdata.stationID,messageHeading,averageHeading);
 				MB_CODE|=MB_CODE_CONV(MB_POSITION_HEADING_INC);
 			}
 
 			// ------- HEADING CHANGE YAW RATE CHECK -------
 
 			if (vehdata.yawRate!=ldmmap::e_DataUnavailableValue::yawRate && lastMessage.yawRate!=ldmmap::e_DataUnavailableValue::yawRate) {
-				double deltaHeading=vehdata.heading-lastMessage.heading;
-				if (deltaHeading>180) {
-					deltaHeading=360-deltaHeading;
-				} else if (deltaHeading<-180) {
-					deltaHeading=-360-deltaHeading;
-				}
-				messageHeadingYawRate=deltaHeading/messageDeltaTime;
-				messageHeadingYawRate=(fmod(vehdata.heading-lastMessage.heading+180,360)-180)/messageDeltaTime; // in degrees/second
-				if (messageHeadingYawRate>maxYawRates[vehdata.stationType]) {
-					fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f\n",
-						MB_HEADING_YAW_RATE_IMP,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageHeadingYawRate,maxYawRates[vehdata.stationType]);
+				messageHeadingYawRate=(fmod(vehdata.heading-lastMessage.heading+540,360)-180)/messageDeltaTime; // in degrees/second
+				if (fabs(messageHeadingYawRate)>maxYawRates[vehdata.stationType]) {
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calcualtedYawRate=%f;maxYawRate=%f\"\n",
+						msgNumber,msgType,MB_HEADING_YAW_RATE_IMP,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageHeadingYawRate,maxYawRates[vehdata.stationType]);
 					MB_CODE|=MB_CODE_CONV(MB_HEADING_YAW_RATE_IMP);
 				}
 				const double averageYawRate=(vehdata.yawRate+lastMessage.yawRate)/2.0;
-				if (messageHeadingYawRate>averageYawRate*(1+m_opts.tolerance*tolMult) || messageHeadingYawRate<averageYawRate*(1-m_opts.tolerance*tolMult)) {
-					if (abs(messageHeadingYawRate-averageYawRate)>25) {
-						fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f\n",
-							MB_HEADING_YAW_RATE_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageHeadingYawRate,averageYawRate);
-						MB_CODE|=MB_CODE_CONV(MB_HEADING_YAW_RATE_INC);
-					}
+				if (fabs(messageHeadingYawRate-averageYawRate)>25) {
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedYawRate=%f;averageYawRate=%f\"\n",
+						msgNumber,msgType,MB_HEADING_YAW_RATE_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageHeadingYawRate,averageYawRate);
+					MB_CODE|=MB_CODE_CONV(MB_HEADING_YAW_RATE_INC);
 				}
 			}
 
@@ -704,14 +797,14 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 			// considering this as driving forward
 			if (averageHeading-90<messageHeading<averageHeading+90) {
 				if (lastMessage.driveDirection==DriveDirection_backward) {
-					fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f\n",
-						MB_POS_AND_HEADING_DIRECTION_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageHeading,lastMessage.driveDirection);
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"calculatedHeading=%f;oldDriveDirection=%f\"\n",
+						msgNumber,msgType,MB_POS_AND_HEADING_DIRECTION_INC,vehdata.gnTimestamp,vehdata.stationID,messageHeading,lastMessage.driveDirection);
 					MB_CODE|=MB_CODE_CONV(MB_POS_AND_HEADING_DIRECTION_INC);
 				}
 			} else {
 				if (lastMessage.driveDirection==DriveDirection_forward) {
-					fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f\n",
-						MB_POS_AND_HEADING_DIRECTION_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageHeading,lastMessage.driveDirection);
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"calculatedHeading=%f;oldDriveDirection=%f\"\n",
+						msgNumber,msgType,MB_POS_AND_HEADING_DIRECTION_INC,vehdata.gnTimestamp,vehdata.stationID,messageHeading,lastMessage.driveDirection);
 					MB_CODE|=MB_CODE_CONV(MB_POS_AND_HEADING_DIRECTION_INC);
 				}
 			}
@@ -721,12 +814,12 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 
 		if (vehdata.vehicleLength.isAvailable() && lastMessage.vehicleLength.isAvailable()) {
 			if (vehdata.vehicleWidth.isAvailable() && lastMessage.vehicleWidth.isAvailable()) {
-				// if tolMult is to default then we are checking a CAM and sizes have to be consistent
+				// if we are checking a CAM izes have to be consistent
 				// otherwise it's a perceived object so the perceived size can change
-				if (tolMult==1) {
+				if (msgType==CAM) {
 					if (vehdata.vehicleLength.getData()!=lastMessage.vehicleLength.getData() || vehdata.vehicleWidth.getData()!=lastMessage.vehicleWidth.getData()) {
-						fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f,%f\n",
-							MB_LENGTH_WIDTH_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,vehdata.vehicleLength.getData(),vehdata.vehicleWidth.getData(),lastMessage.vehicleLength.getData(),lastMessage.vehicleWidth.getData());
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"newDimensions=%fx%f;oldDimensions=%fx%f\"\n",
+							msgNumber,msgType,MB_LENGTH_WIDTH_INC,vehdata.gnTimestamp,vehdata.stationID,vehdata.vehicleLength.getData(),vehdata.vehicleWidth.getData(),lastMessage.vehicleLength.getData(),lastMessage.vehicleWidth.getData());
 						MB_CODE|=MB_CODE_CONV(MB_LENGTH_WIDTH_INC);
 					}
 				} else {
@@ -735,8 +828,8 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 						|| vehdata.vehicleWidth.getData()>lastMessage.vehicleWidth.getData()*(1+m_opts.tolerance*tolMult)
 						|| vehdata.vehicleWidth.getData()<lastMessage.vehicleWidth.getData()*(1-m_opts.tolerance*tolMult)) {
 
-						fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f,%f\n",
-							MB_LENGTH_WIDTH_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,vehdata.vehicleLength.getData(),vehdata.vehicleWidth.getData(),lastMessage.vehicleLength.getData(),lastMessage.vehicleWidth.getData());
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"newDimensions=%fx%f;oldDimensions=%fx%f\"\n",
+							msgNumber,msgType,MB_LENGTH_WIDTH_INC,vehdata.gnTimestamp,vehdata.stationID,vehdata.vehicleLength.getData(),vehdata.vehicleWidth.getData(),lastMessage.vehicleLength.getData(),lastMessage.vehicleWidth.getData());
 						MB_CODE|=MB_CODE_CONV(MB_LENGTH_WIDTH_INC);
 					}
 				}
@@ -751,16 +844,16 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 
 		if (vehdata.longitudinalAcceleration!=ldmmap::e_DataUnavailableValue::longitudinalAcceleration && lastMessage.longitudinalAcceleration!=ldmmap::e_DataUnavailableValue::longitudinalAcceleration) {
 			const double messageAccelerationChange=(vehdata.longitudinalAcceleration-lastMessage.longitudinalAcceleration)/messageDeltaTime;
-			if (messageAccelerationChange>0) {
+			if (messageAccelerationChange>=0) {
 				if (messageAccelerationChange>maxJerks[vehdata.stationType]) {
-					fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f\n",
-						MB_ACCELERATION_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageAccelerationChange,maxJerks[vehdata.stationType]);
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedJerk=%f;maxJerk=%f\"\n",
+						msgNumber,msgType,MB_ACCELERATION_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageAccelerationChange,maxJerks[vehdata.stationType]);
 					MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_INC);
 				}
 			} else {
-				if (-messageAccelerationChange>maxJerks[vehdata.stationType]) {
-					fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f\n",
-						MB_ACCELERATION_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageAccelerationChange,maxJerks[vehdata.stationType]);
+				if (messageAccelerationChange<-maxJerks[vehdata.stationType]) {
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedJerk=%f;minJerk=%f\"\n",
+						msgNumber,msgType,MB_ACCELERATION_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageAccelerationChange,-maxJerks[vehdata.stationType]);
 					MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_INC);
 				}
 			}
@@ -781,50 +874,71 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 
 		if (curvatureRatio!=ldmmap::e_DataUnavailableValue::curvature && speedRatio!=ldmmap::e_DataUnavailableValue::speed && yawRateRatio!=ldmmap::e_DataUnavailableValue::yawRate) {
 			const double dCurvature=vehdata.curvature-lastMessage.curvature;
-			// if approximatively constant (using tolerance for now but should be a separate parameter)
-			if (abs(dCurvature)<lastMessage.curvature*(m_opts.tolerance/10)) {
+			if (fabs(curvatureRatio)<0.05 || fabs(dCurvature<0.01)) {
 				
 				// ------- HEADING CHANGE SPEED CHECK -------
 
-				const double averageHeadingYawRate=averageSpeed*(vehdata.curvature+lastMessage.curvature)/2.0/10000.0;
-				if (messageHeadingYawRate>averageHeadingYawRate*(1+m_opts.tolerance*tolMult) || messageHeadingYawRate>averageHeadingYawRate*(1-m_opts.tolerance*tolMult)) {
-					if (messageHeadingYawRate>averageHeadingYawRate+2 || messageHeadingYawRate<averageHeadingYawRate-2) {
-						fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f\n",
-							MB_HEADING_SPEED_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageHeadingYawRate,averageHeadingYawRate);
+				// yaw rate calculated as average speed * average curvature where curvature is assumed ~constant
+				const double averageSpeedYawRate=(fabs(averageSpeed)*(vehdata.curvature+lastMessage.curvature)/2.0)/radiansFactor;
+				if (messageHeadingYawRate>averageSpeedYawRate*(1+m_opts.tolerance*tolMult) || messageHeadingYawRate<averageSpeedYawRate*(1-m_opts.tolerance*tolMult)) {
+					if (fabs(messageHeadingYawRate-averageSpeedYawRate)>2) {
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedYawRate=%f;averageSpeedYawRate=%f\"\n",
+							msgNumber,msgType,MB_HEADING_SPEED_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageHeadingYawRate,averageSpeedYawRate);
 						MB_CODE|=MB_CODE_CONV(MB_HEADING_SPEED_INC); // DA CAMBIARE
 					}
 				}
+				// const double expectedSpeed=vehdata.yawRate*lastMessage.speed_ms/lastMessage.yawRate;
+				// const double error=fabs(expectedSpeed-vehdata.speed_ms);
+				// const double errorRatio=vehdata.speed_ms/expectedSpeed;
+				// if (fabs(errorRatio-1)>0.05) {
+				// 	if (error>0.01) {
+				// 		fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"speed=%f;calculatedSpeed=%f\"\n",
+				// 			msgNumber,msgType,MB_HEADING_SPEED_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,vehdata.speed_ms,expectedSpeed);
+				// 		MB_CODE|=MB_CODE_CONV(MB_HEADING_SPEED_INC);
+				// 	}
+				// }
 				
 				// ------- YAW RATE CHANGE SPEED CHECK -------
 
-				if (yawRateRatio>speedRatio*(1+m_opts.tolerance*tolMult) || yawRateRatio<speedRatio*(1-m_opts.tolerance*tolMult)) {
-					fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f\n",
-						MB_YAW_RATE_SPEED_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,yawRateRatio,speedRatio);
-					MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_SPEED_INC);
+				const double expectedYawRate=vehdata.speed_ms*lastMessage.yawRate/lastMessage.speed_ms;
+				const double error=fabs(expectedYawRate-vehdata.yawRate);
+				const double errorRatio=vehdata.yawRate/expectedYawRate;
+				if (fabs(errorRatio-1)>0.05) {
+					if (error>2) {
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"yawRate=%f;calculatedYawRate=%f\"\n",
+							msgNumber,msgType,MB_YAW_RATE_SPEED_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,vehdata.yawRate,expectedYawRate);
+						MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_SPEED_INC);
+					}
 				}
 			}
 
 			const double dSpeed=vehdata.speed_ms-lastMessage.speed_ms;
-			if (abs(dSpeed)<lastMessage.speed_ms*(m_opts.tolerance/10)) {
+			if (fabs(speedRatio)<0.05 || fabs(dSpeed)<1) {
 				// pretty much the same checks
 
 				// ------- CURVATURE CHANGE YAW RATE CHECK -------
 
-				if (curvatureRatio>yawRateRatio*(1+m_opts.tolerance*tolMult) || curvatureRatio<yawRateRatio*(1-m_opts.tolerance*tolMult)) {
-					if (abs(curvatureRatio-yawRateRatio)>2) {
-						fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f\n",
-							MB_CURVATURE_YAW_RATE_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,curvatureRatio,yawRateRatio);
-						MB_CODE|=MB_CODE_CONV(MB_CURVATURE_YAW_RATE_INC); // DA CAMBIARE
+				const double expectedCurvature=lastMessage.curvature*vehdata.yawRate/lastMessage.yawRate;
+				double error=fabs(expectedCurvature-vehdata.curvature);
+				double errorRatio=vehdata.curvature/expectedCurvature;
+				if (fabs(errorRatio-1)>0.05) {
+					if (error>0.01) {
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"curvature=%f;calculatedCurvature=%f\"\n",
+							msgNumber,msgType,MB_CURVATURE_YAW_RATE_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,vehdata.curvature,expectedCurvature);
+						MB_CODE|=MB_CODE_CONV(MB_CURVATURE_YAW_RATE_INC);
 					}
 				}
 		
 				// ------- YAW RATE CHANGE CURVATURE CHECK -------
 
-				if (yawRateRatio>curvatureRatio*(1+m_opts.tolerance*tolMult) || yawRateRatio<curvatureRatio*(1-m_opts.tolerance*tolMult)) {
-					if (abs(yawRateRatio-curvatureRatio)>2) {
-						fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f\n",
-							MB_YAW_RATE_CURVATURE_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,yawRateRatio,curvatureRatio);
-						MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_CURVATURE_INC); // DA CAMBIARE
+				const double expectedYawRate=vehdata.curvature*lastMessage.yawRate/lastMessage.curvature;
+				error=fabs(expectedYawRate-vehdata.yawRate);
+				errorRatio=vehdata.yawRate/expectedYawRate;
+				if (fabs(errorRatio-1)>0.05) {
+					if (error>2) {
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"yawRate=%f;calculatedYawRate=%f\"\n",
+							msgNumber,msgType,MB_YAW_RATE_CURVATURE_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,vehdata.yawRate,expectedYawRate);
+						MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_CURVATURE_INC);
 					}
 				}
 
@@ -833,48 +947,49 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 			// ------- CURVATURE CHANGE SPEED CHECK -------
 
 			const double dYawRate=vehdata.yawRate-lastMessage.yawRate;
-			if (abs(dYawRate)<lastMessage.yawRate*(m_opts.tolerance/10)) {
-				// inverse proportional
-				if (1/curvatureRatio>speedRatio*(1+m_opts.tolerance*tolMult) || 1/curvatureRatio<speedRatio*(1-m_opts.tolerance*tolMult)) {
-					fprintf(log_csv,"%d,%d,%lu,%lu,%f,%f,%f\n",
-						MB_CURVATURE_SPEED_INC,msgNumber,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,curvatureRatio,speedRatio);
-					MB_CODE|=MB_CODE_CONV(MB_CURVATURE_SPEED_INC);
+			if (fabs(yawRateRatio-1)<0.05 || fabs(dYawRate)<1 && vehdata.speed_ms!=0) {
+				const double expectedCurvature=lastMessage.curvature*lastMessage.speed_ms/vehdata.speed_ms;
+				const double error=fabs(expectedCurvature-vehdata.curvature);
+				const double errorRatio=vehdata.curvature/expectedCurvature;
+				if (fabs(errorRatio-1)>0.05) {
+					if (error>0.01) {
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"curvature=%f;calculatedCurvature=%f\"\n",
+							msgNumber,msgType,MB_CURVATURE_SPEED_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,vehdata.curvature,expectedCurvature);
+						MB_CODE|=MB_CODE_CONV(MB_CURVATURE_SPEED_INC);
+					}
 				}
 			}
-		}
-
-		if (vehdata.gnLat==lastMessage.gnLat && vehdata.gnLon==lastMessage.gnLon) {
-			std::cout <<"Geonet same source position coordinates\n";
-		}
-		if (vehdata.gnSpeed==lastMessage.gnSpeed) {
-			std::cout <<"Geonet same source position speed\n";
-		}
-		if (vehdata.gnHeading==lastMessage.gnHeading) {
-			std::cout <<"Geonet same source position heading\n";
 		}
 	}
 
 	// ------- CLASS 3 CHECKS -------
-	osmium::object_id_type closestWay=m_osmStore->checkIfPointOnRoad(vehdata.lat,vehdata.lon);
+	double distance=5;
+	osmium::object_id_type closestWay=m_osmStore->checkIfPointOnRoad(vehdata.lat,vehdata.lon,distance);
 	if (closestWay==-1) {
-		// not on road: misbehaviour
+		fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"latitude=%f;longitude=%f;distance=%f\"\n",msgNumber,msgType,MB_NOT_ON_ROAD,vehdata.gnTimestamp,vehdata.stationID,vehdata.lat,vehdata.lon,distance);
+		MB_CODE|=MB_CODE_CONV(MB_NOT_ON_ROAD);
 
 		// check if inside a building, can trigger another misbehaviour after "not on road", (maybe can justify "not on road" if in a "driveable" building)
 		if (m_osmStore->checkIfPointInBuilding(vehdata.lat,vehdata.lon)) {
-			// misbehaviour
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"latitude=%f;longitude=%f\"\n",msgNumber,msgType,MB_INSIDE_BUILDING,vehdata.gnTimestamp,vehdata.stationID,vehdata.lat,vehdata.lon);
+			MB_CODE|=MB_CODE_CONV(MB_INSIDE_BUILDING);
 		}
 	} else {
 		// on road: can check the rest
 
 		if (vehdata.heading!=ldmmap::e_DataUnavailableValue::heading) {
-			if (m_osmStore->checkHeadingMatchesRoad(vehdata.heading,vehdata.lat,vehdata.lon,closestWay)) {
-				// misbehaviour
+			double roadHeading;
+			if (m_osmStore->checkHeadingMatchesRoad(vehdata.heading,vehdata.lat,vehdata.lon,closestWay,roadHeading)) {
+				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"heading=%f;roadHeading=%f\"\n",msgNumber,msgType,MB_HEADING_NOT_FOLLOWING_ROAD,vehdata.gnTimestamp,vehdata.stationID,vehdata.heading,roadHeading);
+				MB_CODE|=MB_CODE_CONV(MB_HEADING_NOT_FOLLOWING_ROAD);
 			}
 		}
 
 		if (vehdata.speed_ms!=ldmmap::e_DataUnavailableValue::speed) {
-			if (m_osmStore->checkSpeedOverTypeLimit(vehdata.speed_ms,closestWay)) {
-				// misbehaviour
+			double speedLimit;
+			if (m_osmStore->checkSpeedOverTypeLimit(vehdata.speed_ms,closestWay,speedLimit)) {
+				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"speed=%f;speedLimit=%f\"\n",msgNumber,msgType,MB_SPEED_OVER_ROAD_LIMIT,vehdata.gnTimestamp,vehdata.stationID,vehdata.speed_ms,speedLimit);
+				MB_CODE|=MB_CODE_CONV(MB_SPEED_OVER_ROAD_LIMIT);
 			}
 		}
 	}
@@ -895,8 +1010,10 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 
 				uint64_t eveCheck=ev.second.unavailables;
 				if (MB_CODE_CHECK(eveCheck,EMB_DISTANCE_DENM_CAM)) {
-					if (haversineDist(evedata.eventLatitude,evedata.eventLongitude,vehdata.lat,vehdata.lon)>100) {
+					double distance=haversineDist(evedata.eventLatitude,evedata.eventLongitude,vehdata.lat,vehdata.lon);
+					if (distance>100) {
 						// misbehaviour: messages too far
+						fprintf(log_csv,"%d,%d,%lu,%lu,\"distance=%f\"\n",msgNumber,EMB_DISTANCE_DENM_CAM,vehdata.gnTimestamp,vehdata.stationID,distance);
 						ev.second.EMB_CODE|=MB_CODE_CONV(EMB_DISTANCE_DENM_CAM);
 						ev.second.unavailables&=MB_CODE_CLEAR(EMB_DISTANCE_DENM_CAM); // clear unavailable bit to avoid checking again in next CAMs
 					}
@@ -904,6 +1021,7 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 
 				if (MB_CODE_CHECK(eveCheck,EMB_REPORTER_SPEED)) {
 					if (vehdata.speed_ms>8.3) {
+						fprintf(log_csv,"%d,%d,%lu,%lu,\"speed=%f\"\n",msgNumber,EMB_REPORTER_SPEED,vehdata.gnTimestamp,vehdata.stationID,vehdata.speed_ms);
 						ev.second.EMB_CODE|=MB_CODE_CONV(EMB_REPORTER_SPEED);
 					}
 				}
@@ -912,6 +1030,7 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 					if (lastMessagePresent) {
 						// has to slow down to 30km/h
 						if (vehdata.speed_ms>8.3 && vehdata.speed_ms>lastMessage.speed_ms) {
+							fprintf(log_csv,"%d,%d,%lu,%lu,\"newSpeed=%f;oldSpeed=%f\"\n",msgNumber,EMB_REPORTER_SLOW_DOWN,vehdata.gnTimestamp,vehdata.stationID,vehdata.speed_ms,lastMessage.speed_ms);
 							ev.second.EMB_CODE|=MB_CODE_CONV(EMB_REPORTER_SLOW_DOWN);
 						}
 					}
@@ -919,12 +1038,14 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 
 				if (MB_CODE_CHECK(eveCheck,EMB_CAM_SPEED)) {
 					if (vehdata.speed_ms>0.1) {
+						fprintf(log_csv,"%d,%d,%lu,%lu,\"speed=%f\"\n",msgNumber,EMB_CAM_SPEED,vehdata.gnTimestamp,vehdata.stationID,vehdata.speed_ms);
 						ev.second.EMB_CODE|=MB_CODE_CONV(EMB_CAM_SPEED);
 					}
 				}
 
 				if (MB_CODE_CHECK(eveCheck,EMB_STATION_TYPE_REPORTER_CAM)) {
 					if (vehdata.stationType!=ldmmap::StationType_LDM_specialVehicles) {
+						fprintf(log_csv,"%d,%d,%lu,%lu,\"stationType=%f\"\n",msgNumber,EMB_STATION_TYPE_REPORTER_CAM,vehdata.gnTimestamp,vehdata.stationID,vehdata.stationType);
 						ev.second.EMB_CODE|=MB_CODE_CONV(EMB_STATION_TYPE_REPORTER_CAM);
 					}
 				}
@@ -932,22 +1053,28 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 				if (MB_CODE_CHECK(eveCheck,EMB_LIGHTBAR_ACTIVE_CAM)) {
 					if (vehdata.lightBarActivated.isAvailable()) {
 						if (!vehdata.lightBarActivated.getData()) {
+							fprintf(log_csv,"%d,%d,%lu,%lu,\"lightBarActivated=%f\"\n",msgNumber,EMB_LIGHTBAR_ACTIVE_CAM,vehdata.gnTimestamp,vehdata.stationID,vehdata.lightBarActivated.getData());
 							ev.second.EMB_CODE|=MB_CODE_CONV(EMB_LIGHTBAR_ACTIVE_CAM);
 						}
 					} else {
+						fprintf(log_csv,"%d,%d,%lu,%lu,\"lightBarActivated=%f\"\n",msgNumber,EMB_LIGHTBAR_ACTIVE_CAM,vehdata.gnTimestamp,vehdata.stationID,vehdata.lightBarActivated.getData());
 						ev.second.EMB_CODE|=MB_CODE_CONV(EMB_LIGHTBAR_ACTIVE_CAM);
 					}
 				}
 
 				if (MB_CODE_CHECK(eveCheck,EMB_IRC_EVENT_SPEED_INC)) {
-					if (abs(ev.second.evedata.eventSpeed.getData()-vehdata.speed_ms)>5) {
+					if (fabs(ev.second.evedata.eventSpeed.getData()-vehdata.speed_ms)>5) {
+						fprintf(log_csv,"%d,%d,%lu,%lu,\"eventSpeed=%f;vehicleSpeed=%f\"\n",
+							msgNumber,EMB_IRC_EVENT_SPEED_INC,vehdata.gnTimestamp,vehdata.stationID,ev.second.evedata.eventSpeed.getData(),vehdata.speed_ms);
 						ev.second.EMB_CODE|=MB_CODE_CONV(EMB_IRC_EVENT_SPEED_INC);
 					}
 					ev.second.unavailables&=MB_CODE_CLEAR(EMB_IRC_EVENT_SPEED_INC);
 				}
 
 				if (MB_CODE_CHECK(eveCheck,EMB_IRC_EVENT_HEADING_INC)) {
-					if (abs(ev.second.evedata.eventPositionHeading.getData()-vehdata.heading)>10) {
+					if (fabs(ev.second.evedata.eventPositionHeading.getData()-vehdata.heading)>10) {
+						fprintf(log_csv,"%d,%d,%lu,%lu,\"eventHeading=%f;vehicleHeading=%f\"\n",
+							msgNumber,EMB_IRC_EVENT_HEADING_INC,vehdata.gnTimestamp,vehdata.stationID,ev.second.evedata.eventPositionHeading.getData(),vehdata.heading);
 						ev.second.EMB_CODE|=MB_CODE_CONV(EMB_IRC_EVENT_HEADING_INC);
 					}
 					ev.second.unavailables&=MB_CODE_CLEAR(EMB_IRC_EVENT_HEADING_INC);
@@ -956,10 +1083,12 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 				if (MB_CODE_CHECK(eveCheck,EMB_IRC_BEHAVIOUR_ACCELERATION)) {
 					if (lastMessagePresent) {
 						if (vehdata.speed_ms>=lastMessage.speed_ms) {
+							fprintf(log_csv,"%d,%d,%lu,%lu,\"newSpeed=%f;oldSpeed=%f\"\n",msgNumber,EMB_IRC_BEHAVIOUR_ACCELERATION,vehdata.gnTimestamp,vehdata.stationID,vehdata.speed_ms,lastMessage.speed_ms);
 							ev.second.EMB_CODE|=MB_CODE_CONV(EMB_IRC_BEHAVIOUR_ACCELERATION);
 						}
 					}
 					if (vehdata.longitudinalAcceleration>0) {
+						fprintf(log_csv,"%d,%d,%lu,%lu,\"acceleration=%f\"\n",msgNumber,EMB_IRC_BEHAVIOUR_ACCELERATION,vehdata.gnTimestamp,vehdata.stationID,vehdata.longitudinalAcceleration);
 						ev.second.EMB_CODE|=MB_CODE_CONV(EMB_IRC_BEHAVIOUR_ACCELERATION);
 					}
 					// maybe after the first emergency brake the car stops braking so this also needs to be checked only once and not for the whole period of the event
@@ -968,9 +1097,10 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 			}
 		} else if (MB_CODE_CHECK(ev.second.unavailables,EMB_SURROUNDING_VEH_BEHAVIOUR_SPEED)) {
 			// nested ifs to avoid the heavier distance calculation
-			if (lastMessagePresent && closestWay==ev.second.eventRoad && abs(vehdata.heading-ev.second.eventHeading)<45) {
+			if (lastMessagePresent && closestWay==ev.second.eventRoad && fabs(vehdata.heading-ev.second.eventHeading)<45) {
 				if (haversineDist(evedata.eventLatitude,evedata.eventLongitude,vehdata.lat,vehdata.lon)<100) {
 					if (vehdata.speed_ms>8.3 && vehdata.speed_ms>lastMessage.speed_ms) {
+						fprintf(log_csv,"%d,%d,%lu,%lu,\"newSpeed=%f;oldSpeed=%f\"\n",msgNumber,EMB_SURROUNDING_VEH_BEHAVIOUR_SPEED,vehdata.gnTimestamp,vehdata.stationID,vehdata.speed_ms,lastMessage.speed_ms);
 						ev.second.EMB_CODE|=MB_CODE_CONV(EMB_SURROUNDING_VEH_BEHAVIOUR_SPEED);
 					}
 				}
@@ -978,7 +1108,7 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 		}
 	}
 
-	if (tolMult!=1) {
+	if (msgType==CPM) {
 		// clean the unavailables for cpms
 		unavailables&=(MB_CODE_CONV(UNAV_LATITUDE)||MB_CODE_CONV(UNAV_LONGITUDE));
 	}
@@ -986,10 +1116,12 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 	return MB_CODE;
 }
 
-uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables, double tolMult) {
+uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables, int msgType) {
 	uint64_t MB_CODE=0;
 	ldmmap::vehicleData_t lastMessage;
 	bool lastMessagePresent=false;
+	double tolMult=msgType==VAM?1:m_opts.cpmToleranceMultiplier;
+
 	if (m_lastMessageCache.find(vehdata.stationID)!=m_lastMessageCache.end()) {
 		lastMessagePresent=true;
 		lastMessage=m_lastMessageCache[vehdata.stationID];
@@ -1005,6 +1137,7 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 
 	if (vehdata.speed_ms!=ldmmap::e_DataUnavailableValue::speed) {
 		if (vehdata.speed_ms>maxSpeeds[vehdata.stationType]) {
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"speed=%f;maxSpeed=%f\"\n",msgNumber,msgType,MB_SPEED_IMP,vehdata.gnTimestamp,vehdata.stationID,vehdata.speed_ms,maxSpeeds[vehdata.stationType]);
 			MB_CODE|=MB_CODE_CONV(MB_SPEED_IMP);
 		}
 	} else {
@@ -1014,24 +1147,26 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 	// ------- PLAUSIBLE MAX ACCELERATION CHECK -------
 
 	if (vehdata.longitudinalAcceleration!=ldmmap::e_DataUnavailableValue::longitudinalAcceleration) {
-		if (vehdata.longitudinalAcceleration>=0) {
-			if (vehdata.longitudinalAcceleration>maxAccelerations[vehdata.stationType]) {
-				MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_IMP);
-			}
-		} else {
-			if (vehdata.longitudinalAcceleration<maxBrakings[vehdata.stationType]) {
-				MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_IMP);
-			}
+		//accelerating
+		if (vehdata.longitudinalAcceleration>maxAccelerations[vehdata.stationType]) {
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"acceleration=%f;maxAcceleration=%f\"\n",msgNumber,msgType,MB_ACCELERATION_IMP,vehdata.gnTimestamp,vehdata.stationID,vehdata.longitudinalAcceleration,maxAccelerations[vehdata.stationType]);
+			MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_IMP);
 		}
-
+		//braking
+		if (vehdata.longitudinalAcceleration<minAccelerations[vehdata.stationType]) {
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"acceleration=%f;minAcceleration=%f\"\n",msgNumber,msgType,MB_ACCELERATION_IMP,vehdata.gnTimestamp,vehdata.stationID,vehdata.longitudinalAcceleration,minAccelerations[vehdata.stationType]);
+			MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_IMP);
+		}
 	} else {
 		unavailables|=MB_CODE_CONV(UNAV_ACCELERATION);
 	}
 
-	// ------- PLAUSIBLE MAX CURVATURE CHECK -------
-
+	// ------- PLAUSIBLE MAX LATERAL ACCELERATION CHECK (FROM CURVATURE) -------
+	const double curvaturelateralAcceleration=pow(vehdata.speed_ms,2)*vehdata.curvature;
 	if (vehdata.curvature!=ldmmap::e_DataUnavailableValue::curvature) {
-		if (vehdata.curvature>maxCurvatures[vehdata.stationType]) {
+		if (curvaturelateralAcceleration>maxLateralAcceleration[vehdata.stationType]) {
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"lateralAcceleration=%f;maxLateralAcceleration=%f\"\n",
+				msgNumber,msgType,MB_CURVATURE_IMP,vehdata.gnTimestamp,vehdata.stationID,curvaturelateralAcceleration,maxLateralAcceleration[vehdata.stationType]);
 			MB_CODE|=MB_CODE_CONV(MB_CURVATURE_IMP);
 		}
 	} else {
@@ -1042,6 +1177,7 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 
 	if (vehdata.yawRate!=ldmmap::e_DataUnavailableValue::yawRate) {
 		if (vehdata.yawRate>maxYawRates[vehdata.stationType]) {
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"yawRate=%f;maxYawRate=%f\"\n",msgNumber,msgType,MB_YAW_RATE_IMP,vehdata.gnTimestamp,vehdata.stationID,vehdata.yawRate,maxYawRates[vehdata.stationType]);
 			MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_IMP);
 		}
 	} else {
@@ -1049,21 +1185,31 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 	}
 	}
 
+	double messageDeltaTime; // seconds
 	// ------- CLASS 2 CHECKS -------
 	if (lastMessagePresent) {
 
 		// ------- BEACON FREQUENCY CHECK -------
-
-		double messageDeltaTime=(vehdata.gnTimestamp-lastMessage.gnTimestamp)/1000.0; // in seconds
+		messageDeltaTime=(vehdata.camTimestamp-lastMessage.camTimestamp)/1000.0;// in seconds
 		if (messageDeltaTime<0) {
-			messageDeltaTime+=429496.7296; // divided by 1000 to be in seconds
+			// messageDeltaTime+=429496.7296; // for gnTimestamp divided by 1000 to be in seconds
+			messageDeltaTime+=65.536; // for camTimestamp divided by 1000 to be in seconds
 		}
 		if (messageDeltaTime>m_opts.maxTimeForConsecutive) {
-			// messages too far in time
+			// Messages are too far in time for the used configuration, avoid checking any class 2
+			// reuse lastMessagePresent set to false to pretend there is no last message (potentially a second variable could be used but its not needed in the current scenario)
+			MB_CODE|=MB_CODE_CONV(MB_BEACON_FREQ_LOW);
+			lastMessagePresent=false;
 		}
-		if (messageDeltaTime<0.1) {
+		if (messageDeltaTime<0.095) {
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;lastTimestamp=%li\"\n",msgNumber,msgType,MB_BEACON_FREQ_INC,vehdata.camTimestamp,vehdata.stationID,messageDeltaTime,lastMessage.camTimestamp);
 			MB_CODE|=MB_CODE_CONV(MB_BEACON_FREQ_INC);
 		}
+
+	}
+
+	// ------- CLASS 2 CHECKS -------
+	if (lastMessagePresent) {
 
 		// ------- POSITION CHANGE SPEED CHECK -------
 
@@ -1085,11 +1231,15 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 			const double messagePositionSpeed=messagePositionDistance/messageDeltaTime;
 			// Average speed needed to travel the "message distance" is implausible
 			if (messagePositionSpeed>maxSpeeds[vehdata.stationType]) {
+				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;messageDistance=%f;calculatedSpeed=%f;maxSpeed=%f\"\n",
+					msgNumber,msgType,MB_POSITION_SPEED_IMP,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messagePositionDistance,messagePositionSpeed,maxSpeeds[vehdata.stationType]);
 				MB_CODE|=MB_CODE_CONV(MB_POSITION_SPEED_IMP);
 			}
 			averageSpeed=(vehdata.speed_ms+lastMessage.speed_ms)/2.0;
 			// Calculated average speed doesn't match with average speed of the CAMs
 			if (messagePositionSpeed>averageSpeed*(1+m_opts.tolerance*tolMult) || messagePositionSpeed<averageSpeed*(1-m_opts.tolerance*tolMult)) {
+				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;messageDistance=%f;calculatedSpeed=%f;averageSpeed=%f\"\n",
+					msgNumber,msgType,MB_POSITION_SPEED_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messagePositionDistance,messagePositionSpeed,averageSpeed);
 				MB_CODE|=MB_CODE_CONV(MB_POSITION_SPEED_INC);
 			}
 
@@ -1097,18 +1247,24 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 
 			const double messageSpeedAcceleration=(vehdata.speed_ms-lastMessage.speed_ms)/messageDeltaTime;
 			// Average acceleration needed to reach message speed is implausible
-			if (messageSpeedAcceleration>0) {
+			if (messageSpeedAcceleration>=0) {
 				if (messageSpeedAcceleration>maxAccelerations[vehdata.stationType]) {
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedAcceleration=%f;maxAcceleration=%f\"\n",
+							msgNumber,msgType,MB_SPEED_ACCELERATION_IMP,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageSpeedAcceleration,maxAccelerations[vehdata.stationType]);
 					MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_IMP);
 				}
 			} else {
-				if (messageSpeedAcceleration<maxBrakings[vehdata.stationType]) {
+				if (messageSpeedAcceleration<minAccelerations[vehdata.stationType]) {
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedAcceleration=%f;minAcceleration=%f\"\n",
+							msgNumber,msgType,MB_SPEED_ACCELERATION_IMP,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageSpeedAcceleration,minAccelerations[vehdata.stationType]);
 					MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_IMP);
 				}
 			}
 			const double averageAcceleration=(vehdata.longitudinalAcceleration+lastMessage.longitudinalAcceleration)/2.0;
 			// Calculated average acceleration doesn't match with average acceleration of the CAMs
 			if (messageSpeedAcceleration>averageAcceleration*(1+m_opts.tolerance*tolMult) || messageSpeedAcceleration<averageSpeed*(1-m_opts.tolerance*tolMult)) {
+				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedAcceleration=%f;averageAcceleration=%f\"\n",
+								msgNumber,msgType,MB_SPEED_ACCELERATION_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageSpeedAcceleration,averageAcceleration);
 				MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_INC);
 			}
 		}
@@ -1123,7 +1279,9 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 			}
 			// Calculated average heading doesn't match with average heading of the CAMs
 			if (messageHeading>averageHeading*(1+m_opts.tolerance*tolMult) || messageHeading<averageHeading*(1-m_opts.tolerance*tolMult)) {
-				if (abs(messageHeading-averageHeading)>5) {
+				if (fabs(messageHeading-averageHeading)>5) {
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"calculatedHeading=%f;averageHeading=%f\"\n",
+						msgNumber,msgType,MB_POSITION_HEADING_INC,vehdata.gnTimestamp,vehdata.stationID,messageHeading,averageHeading);
 					MB_CODE|=MB_CODE_CONV(MB_POSITION_HEADING_INC);
 				}
 			}
@@ -1131,12 +1289,16 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 			// ------- HEADING CHANGE YAW RATE CHECK -------
 
 			if (vehdata.yawRate!=ldmmap::e_DataUnavailableValue::yawRate && lastMessage.yawRate!=ldmmap::e_DataUnavailableValue::yawRate) {
-				messageHeadingYawRate=(vehdata.heading-lastMessage.heading)/messageDeltaTime; // in degrees/second
-				if (messageHeadingYawRate>maxYawRates[vehdata.stationType]) {
+				messageHeadingYawRate=(fmod(vehdata.heading-lastMessage.heading+540,360)-180)/messageDeltaTime; // in degrees/second
+				if (fabs(messageHeadingYawRate)>maxYawRates[vehdata.stationType]) {
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calcualtedYawRate=%f;maxYawRate=%f\"\n",
+						msgNumber,msgType,MB_HEADING_YAW_RATE_IMP,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageHeadingYawRate,maxYawRates[vehdata.stationType]);
 					MB_CODE|=MB_CODE_CONV(MB_HEADING_YAW_RATE_IMP);
 				}
 				const double averageYawRate=(vehdata.yawRate+lastMessage.yawRate)/2.0;
-				if (messageHeadingYawRate>averageYawRate*(1+m_opts.tolerance*tolMult) || messageHeadingYawRate<averageYawRate*(1-m_opts.tolerance*tolMult)) {
+				if (fabs(messageHeadingYawRate-averageYawRate)>25) {
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedYawRate=%f;averageYawRate=%f\"\n",
+						msgNumber,msgType,MB_HEADING_YAW_RATE_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageHeadingYawRate,averageYawRate);
 					MB_CODE|=MB_CODE_CONV(MB_HEADING_YAW_RATE_INC);
 				}
 			}
@@ -1146,6 +1308,8 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 
 		if (vehdata.vruSizeClass!=VruSizeClass_unavailable && lastMessage.vruSizeClass!=VruSizeClass_unavailable) {
 			if (vehdata.vruSizeClass!=lastMessage.vruSizeClass) {
+				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"newSizeClass=%f;oldSizeClass=%f\"\n",
+						msgNumber,msgType,MB_HEADING_YAW_RATE_INC,vehdata.gnTimestamp,vehdata.stationID,vehdata.vruSizeClass,lastMessage.vruSizeClass);
 				MB_CODE|=MB_CODE_CONV(MB_LENGTH_WIDTH_INC);
 			}
 		} else {
@@ -1156,8 +1320,18 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 
 		if (vehdata.longitudinalAcceleration!=ldmmap::e_DataUnavailableValue::longitudinalAcceleration && lastMessage.longitudinalAcceleration!=ldmmap::e_DataUnavailableValue::longitudinalAcceleration) {
 			const double messageAccelerationChange=vehdata.longitudinalAcceleration-lastMessage.longitudinalAcceleration;
-			if (messageAccelerationChange>maxJerks[vehdata.stationType] || -messageAccelerationChange<maxJerks[vehdata.stationType]) {
-				MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_INC);
+			if (messageAccelerationChange>=0) {
+				if (messageAccelerationChange>maxJerks[vehdata.stationType]) {
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedJerk=%f;maxJerk=%f\"\n",
+							msgNumber,msgType,MB_ACCELERATION_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageAccelerationChange,maxJerks[vehdata.stationType]);
+					MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_INC);
+				}
+			} else {
+				if (messageAccelerationChange<-maxJerks[vehdata.stationType]) {
+					fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedJerk=%f;minJerk=%f\"\n",
+							msgNumber,msgType,MB_ACCELERATION_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageAccelerationChange,-maxJerks[vehdata.stationType]);
+					MB_CODE|=MB_CODE_CONV(MB_ACCELERATION_INC);
+				}
 			}
 		}
 		
@@ -1176,37 +1350,72 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 
 		if (curvatureRatio!=ldmmap::e_DataUnavailableValue::curvature && speedRatio!=ldmmap::e_DataUnavailableValue::speed && yawRateRatio!=ldmmap::e_DataUnavailableValue::yawRate) {
 			const double dCurvature=vehdata.curvature-lastMessage.curvature;
-			// if approximatively constant (using tolerance for now but should be a separate parameter)
-			if (abs(dCurvature)<lastMessage.curvature*(m_opts.tolerance/10)) {
+			if (fabs(curvatureRatio)<0.05 || fabs(dCurvature<0.01)) {
 				
 				// ------- HEADING CHANGE SPEED CHECK -------
 
-				const double averageHeadingYawRate=averageSpeed*(vehdata.curvature+lastMessage.curvature)/2.0;
-				if (messageHeadingYawRate>averageHeadingYawRate*(1+m_opts.tolerance*tolMult) || messageHeadingYawRate>averageHeadingYawRate*(1-m_opts.tolerance*tolMult)) {
-					MB_CODE|=MB_CODE_CONV(MB_HEADING_SPEED_INC);	
+				// yaw rate calculated as average speed * average curvature where curvature is assumed ~constant
+				const double averageSpeedYawRate=(fabs(averageSpeed)*(vehdata.curvature+lastMessage.curvature)/2.0)/radiansFactor;
+				if (messageHeadingYawRate>averageSpeedYawRate*(1+m_opts.tolerance*tolMult) || messageHeadingYawRate<averageSpeedYawRate*(1-m_opts.tolerance*tolMult)) {
+					if (fabs(messageHeadingYawRate-averageSpeedYawRate)>2) {
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedYawRate=%f;averageSpeedYawRate=%f\"\n",
+							msgNumber,msgType,MB_HEADING_SPEED_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageHeadingYawRate,averageSpeedYawRate);
+						MB_CODE|=MB_CODE_CONV(MB_HEADING_SPEED_INC); // DA CAMBIARE
+					}
 				}
+				// const double expectedSpeed=vehdata.yawRate*lastMessage.speed_ms/lastMessage.yawRate;
+				// const double error=fabs(expectedSpeed-vehdata.speed_ms);
+				// const double errorRatio=vehdata.speed_ms/expectedSpeed;
+				// if (fabs(errorRatio-1)>0.05) {
+				// 	if (error>0.01) {
+				// 		fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"speed=%f;calculatedSpeed=%f\"\n",
+				// 			msgNumber,msgType,MB_HEADING_SPEED_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,vehdata.speed_ms,expectedSpeed);
+				// 		MB_CODE|=MB_CODE_CONV(MB_HEADING_SPEED_INC);
+				// 	}
+				// }
 				
 				// ------- YAW RATE CHANGE SPEED CHECK -------
 
-				if (yawRateRatio>speedRatio*(1+m_opts.tolerance*tolMult) || yawRateRatio<speedRatio*(1-m_opts.tolerance*tolMult)) {
-					MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_SPEED_INC);
+				const double expectedYawRate=vehdata.speed_ms*lastMessage.yawRate/lastMessage.speed_ms;
+				const double error=fabs(expectedYawRate-vehdata.yawRate);
+				const double errorRatio=vehdata.yawRate/expectedYawRate;
+				if (fabs(errorRatio-1)>0.05) {
+					if (error>2) {
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"yawRate=%f;calculatedYawRate=%f\"\n",
+							msgNumber,msgType,MB_YAW_RATE_SPEED_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,vehdata.yawRate,expectedYawRate);
+						MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_SPEED_INC);
+					}
 				}
 			}
 
 			const double dSpeed=vehdata.speed_ms-lastMessage.speed_ms;
-			if (abs(dSpeed)<lastMessage.speed_ms*(m_opts.tolerance/10)) {
+			if (fabs(speedRatio)<0.05 || fabs(dSpeed)<1) {
 				// pretty much the same checks
 
 				// ------- CURVATURE CHANGE YAW RATE CHECK -------
 
-				if (curvatureRatio>yawRateRatio*(1+m_opts.tolerance*tolMult) || curvatureRatio<yawRateRatio*(1-m_opts.tolerance*tolMult)) {
-					MB_CODE|=MB_CODE_CONV(MB_CURVATURE_YAW_RATE_INC);
+				const double expectedCurvature=lastMessage.curvature*vehdata.yawRate/lastMessage.yawRate;
+				double error=fabs(expectedCurvature-vehdata.curvature);
+				double errorRatio=vehdata.curvature/expectedCurvature;
+				if (fabs(errorRatio-1)>0.05) {
+					if (error>0.01) {
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"curvature=%f;calculatedCurvature=%f\"\n",
+							msgNumber,msgType,MB_CURVATURE_YAW_RATE_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,vehdata.curvature,expectedCurvature);
+						MB_CODE|=MB_CODE_CONV(MB_CURVATURE_YAW_RATE_INC);
+					}
 				}
 		
 				// ------- YAW RATE CHANGE CURVATURE CHECK -------
 
-				if (yawRateRatio>curvatureRatio*(1+m_opts.tolerance*tolMult) || yawRateRatio<curvatureRatio*(1-m_opts.tolerance*tolMult)) {
-					MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_CURVATURE_INC);
+				const double expectedYawRate=vehdata.curvature*lastMessage.yawRate/lastMessage.curvature;
+				error=fabs(expectedYawRate-vehdata.yawRate);
+				errorRatio=vehdata.yawRate/expectedYawRate;
+				if (fabs(errorRatio-1)>0.05) {
+					if (error>2) {
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"yawRate=%f;calculatedYawRate=%f\"\n",
+							msgNumber,msgType,MB_YAW_RATE_CURVATURE_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,vehdata.yawRate,expectedYawRate);
+						MB_CODE|=MB_CODE_CONV(MB_YAW_RATE_CURVATURE_INC);
+					}
 				}
 
 			}
@@ -1214,9 +1423,16 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 			// ------- CURVATURE CHANGE SPEED CHECK -------
 
 			const double dYawRate=vehdata.yawRate-lastMessage.yawRate;
-			if (abs(dYawRate)<lastMessage.yawRate*(m_opts.tolerance/10)) {
-				if (curvatureRatio>speedRatio*(1+m_opts.tolerance*tolMult) || curvatureRatio<speedRatio*(1-m_opts.tolerance*tolMult)) {
-					MB_CODE|=MB_CODE_CONV(MB_CURVATURE_SPEED_INC);
+			if (fabs(yawRateRatio-1)<0.05 || fabs(dYawRate)<1) {
+				const double expectedCurvature=lastMessage.curvature*lastMessage.speed_ms/vehdata.speed_ms;
+				const double error=fabs(expectedCurvature-vehdata.curvature);
+				const double errorRatio=vehdata.curvature/expectedCurvature;
+				if (fabs(errorRatio-1)>0.05) {
+					if (error>0.01) {
+						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"curvature=%f;calculatedCurvature=%f\"\n",
+							msgNumber,msgType,MB_CURVATURE_SPEED_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,vehdata.curvature,expectedCurvature);
+						MB_CODE|=MB_CODE_CONV(MB_CURVATURE_SPEED_INC);
+					}
 				}
 			}
 		}
@@ -1233,11 +1449,14 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 	}
 
 	// ------- CLASS 3 CHECKS -------
-	osmium::object_id_type closestWay=m_osmStore->checkIfPointOnRoad(vehdata.lat,vehdata.lon);
+	double distance=5;
+	osmium::object_id_type closestWay=m_osmStore->checkIfPointOnRoad(vehdata.lat,vehdata.lon,distance,lastMessagePresent?lastMessage.wayId:-1);
 	if (closestWay==-1) {
 		// not on road
+		fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"latitude=%f;longitude=%f;distance=%f\"\n",msgNumber,msgType,MB_NOT_ON_ROAD,vehdata.gnTimestamp,vehdata.stationID,vehdata.lat,vehdata.lon,distance);
 		MB_CODE|=MB_CODE_CONV(MB_NOT_ON_ROAD);
 		if (m_osmStore->checkIfPointInBuilding(vehdata.lat,vehdata.lon)) {
+			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"latitude=%f;longitude=%f\"\n",msgNumber,msgType,MB_INSIDE_BUILDING,vehdata.gnTimestamp,vehdata.stationID,vehdata.lat,vehdata.lon);
 			MB_CODE|=MB_CODE_CONV(MB_INSIDE_BUILDING);
 		}
 		if (vehdata.vruEnvironment==VruEnvironment_onVehicleRoad) {
@@ -1245,15 +1464,23 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 		}
 	} else {
 		// on road
-		if (m_osmStore->checkHeadingMatchesRoad(vehdata.heading,vehdata.lat,vehdata.lon,closestWay)) {
-			MB_CODE|=MB_CODE_CONV(MB_HEADING_NOT_FOLLOWING_ROAD);
+		if (vehdata.heading!=ldmmap::e_DataUnavailableValue::heading) {
+			double roadHeading;
+			if (m_osmStore->checkHeadingMatchesRoad(vehdata.heading,vehdata.lat,vehdata.lon,closestWay,roadHeading)) {
+				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"heading=%f;roadHeading=%f\"\n",msgNumber,msgType,MB_HEADING_NOT_FOLLOWING_ROAD,vehdata.gnTimestamp,vehdata.stationID,vehdata.heading,roadHeading);
+				MB_CODE|=MB_CODE_CONV(MB_HEADING_NOT_FOLLOWING_ROAD);
+			}
 		}
-		if (m_osmStore->checkSpeedOverTypeLimit(vehdata.speed_ms,closestWay)) {
-			MB_CODE|=MB_CODE_CONV(MB_SPEED_OVER_ROAD_LIMIT);
+		if (vehdata.speed_ms!=ldmmap::e_DataUnavailableValue::speed) {
+			double speedLimit;
+			if (m_osmStore->checkSpeedOverTypeLimit(vehdata.speed_ms,closestWay,speedLimit)) {
+				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"speed=%f;speedLimit=%f\"\n",msgNumber,msgType,MB_SPEED_OVER_ROAD_LIMIT,vehdata.gnTimestamp,vehdata.stationID,vehdata.speed_ms,speedLimit);
+				MB_CODE|=MB_CODE_CONV(MB_SPEED_OVER_ROAD_LIMIT);
+			}
 		}
 	}
 
-	if (tolMult!=1) {
+	if (msgType==CPM) {
 		// clean the unavailables for cpms
 		unavailables&=(MB_CODE_CONV(UNAV_LATITUDE)||MB_CODE_CONV(UNAV_LONGITUDE));
 	}
@@ -1272,10 +1499,10 @@ uint64_t MisbehaviourDetector::individualCPMchecks(std::vector<ldmmap::vehicleDa
 			|| vehdata.stationType==ldmmap::e_StationTypeLDM::StationType_LDM_moped
 			|| vehdata.stationType==ldmmap::e_StationTypeLDM::StationType_LDM_motorcycle) {
 			// VAM controls for selected stationTypes
-			MB_CODE|=individualVAMchecks(vehdata,unavailables,m_opts.cpmToleranceMultiplier);
+			MB_CODE|=individualVAMchecks(vehdata,unavailables,CPM);
 		} else {
 			// CAM controls for other stationTypes
-			MB_CODE|=individualCAMchecks(vehdata,unavailables,m_opts.cpmToleranceMultiplier);
+			MB_CODE|=individualCAMchecks(vehdata,unavailables,CPM);
 		}
 	}
 	return MB_CODE;
@@ -1294,8 +1521,39 @@ void MisbehaviourDetector::processDENM(proton::binary message_bin, ldmmap::event
 	currentEvent.keyEvent = m_db_ptr->KEY_EVENT(evedata.eventLatitude,evedata.eventLongitude,evedata.eventElevation,evedata.eventCauseCode);
 	uint64_t expiration=get_timestamp_ns()+20e9; // 20 seconds from now
 
-	//checks to be made here with decoded data
-	// MB_CODE=detectionFunction(...);
+	// Check for security, currently proceeds with the rest of the checks, this behaviour may change according to the reporting service needs
+	// In particular for DENMs management there is no return code here so the current state is basically a stub
+	if (!m_opts.ignoreSecurity) {
+		switch (sec_retval) {
+			case Security::SECURITY_NO_SEC:
+				break;
+			case Security::SECURITY_VALID_CERTIFICATE:
+				if (!certificateData.digest.empty())
+					m_certStore_ptr->insert_or_assign(certificateData.digest,certificateData);
+				break;
+			case Security::SECURITY_VERIFICATION_FAILED:
+				// left here for possible future changes
+				// at the moment this returnvalue makes geonet and then etsidecoder to return an error
+				// meaning the message is discarded before reaching here
+				break;
+			case Security::SECURITY_INVALID_CERTIFICATE:
+				break;
+			case Security::SECURITY_DIGEST:
+				switch(m_certStore_ptr->isValid(certificateData.digest)) {
+					case e_DigestValid_retval::DIGEST_OK:
+						break;
+					case e_DigestValid_retval::DIGEST_EXPIRED:
+						break;
+					case e_DigestValid_retval::DIGEST_NOT_FOUND:
+						break;
+					default:
+						break;
+				}
+				break;
+			default:
+				break;
+		}
+	}
 
 	// if the event doesn't exist in the validation buffer add it and perform individualDENMchecks
 	// otherwise add the new reporter to the reporters
@@ -1307,19 +1565,11 @@ void MisbehaviourDetector::processDENM(proton::binary message_bin, ldmmap::event
 		currentEvent.unavailables=0;
 		currentEvent.reporters.insert(evedata.originatingStationID);
 		
-		ldmmap::eventData_t lastEvent;
-		bool lastEventPresent;
 		ldmmap::vehicleData_t vehdata;
 		bool lastMessagePresent;
 		pending=false;
 
 		uint64_t keyEvent = m_db_ptr->KEY_EVENT(evedata.eventLatitude,evedata.eventLongitude,evedata.eventElevation,evedata.eventCauseCode);
-		if (m_pendingEvents.find(keyEvent)!=m_pendingEvents.end()) {
-			lastEvent=m_pendingEvents.at(keyEvent).evedata;
-			lastEventPresent=true;
-		} else {
-			lastEventPresent=false;
-		}
 
 		if (m_lastMessageCache.find(evedata.originatingStationID)!=m_lastMessageCache.end()) {
 			vehdata=m_lastMessageCache.at(evedata.originatingStationID);
@@ -1330,7 +1580,8 @@ void MisbehaviourDetector::processDENM(proton::binary message_bin, ldmmap::event
 			currentEvent.eventHeading=720;
 		}
 
-		currentEvent.eventRoad=m_osmStore->checkIfPointOnRoad(evedata.eventLatitude,evedata.eventLongitude,5);
+		double distance=5;
+		currentEvent.eventRoad=m_osmStore->checkIfPointOnRoad(evedata.eventLatitude,evedata.eventLongitude,distance);
 		currentEvent.eventRoad;
 		
 
@@ -1362,20 +1613,6 @@ void MisbehaviourDetector::processDENM(proton::binary message_bin, ldmmap::event
 				pending=true;
 				// unavailables: roadType
 				currentEvent.unavailables|=MB_CODE_CONV(EMB_ROAD_TYPE);
-			}
-
-			if (lastEventPresent) {
-				if (evedata.eventHistory.isAvailable() && lastEvent.eventHistory.isAvailable()) {
-					// simply compare eventHistory, maybe since eventHistory appends each new event to it it should compare after truncating last element
-					if (evedata.eventHistory.getData().list.array!=lastEvent.eventHistory.getData().list.array) {
-						// misbehaviour: eventHistory not matching
-						currentEvent.EMB_CODE|=MB_CODE_CONV(EMB_EVENT_HISTORY_INC);
-					}
-					//evedata.eventHistory.getData().list.array
-				} else {
-					// unavailables: eventHistory
-					currentEvent.unavailables|=MB_CODE_CONV(EMB_EVENT_HISTORY_INC);
-				}
 			}
 
 			currentEvent.unavailables|=MB_CODE_CONV(EMB_UNLIKELY_STATISTICS);
@@ -1422,13 +1659,13 @@ void MisbehaviourDetector::processDENM(proton::binary message_bin, ldmmap::event
 				// difference in heading low enough so same direction to avoid other direction vehicles
 
 				// what if vehdata is not present?
-				if (abs(vd.heading-vehdata.heading)<45) {
+				if (fabs(vd.heading-vehdata.heading)<45) {
 					const double radiansFactor=M_PI/180;
 					double dLat=vd.lat-vehdata.lat;
 					double dLon=vd.lon-vehdata.lon;
 					// check if it's in front by calculating the heading of the vector formed between the 2 cars
 					// since the vector head is on the other car this has to be in front to have a similar heading to the driving direction
-					if (abs(vehdata.heading-atan2(dLon,dLat)/radiansFactor)<headingLimit) {
+					if (fabs(vehdata.heading-atan2(dLon,dLat)/radiansFactor)<headingLimit) {
 						if (vd.speed_ms>speedLimit) {
 							// misbehaviour: above value
 							fprintf(log_csv,"%d,%d,%lu,%lu,%lu,%f\n",EMB_DISTANCE_DENM_CAM,msgNumber,evedata.gnTimestampDENM,evedata.originatingStationID,vd.stationID,vd.speed_ms); // additional data is stationId and speed of each ahead vehicle over the limit
@@ -1518,19 +1755,6 @@ void MisbehaviourDetector::processDENM(proton::binary message_bin, ldmmap::event
 			currentEvent.unavailables|=MB_CODE_CONV(EMB_STATION_TYPE_REPORTER_CAM);
 			currentEvent.unavailables|=MB_CODE_CONV(EMB_LIGHTBAR_ACTIVE_CAM);
 
-			if (lastEventPresent) {
-				if (evedata.eventHistory.isAvailable() && lastEvent.eventHistory.isAvailable()) {
-					// simply compare eventHistory, maybe since eventHistory appends each new event to it it should compare after truncating last element
-					if (evedata.eventHistory.getData().list.array!=lastEvent.eventHistory.getData().list.array) {
-						// misbehaviour: eventHistory not matching
-						currentEvent.EMB_CODE|=MB_CODE_CONV(EMB_EVENT_HISTORY_INC);
-					}
-				} else {
-					// unavailables: eventHistory
-					currentEvent.unavailables|=MB_CODE_CONV(EMB_EVENT_HISTORY_INC);
-				}
-			}
-
 			currentEvent.unavailables|=MB_CODE_CONV(EMB_SURROUNDING_VEH_BEHAVIOUR_SPEED);
 			currentEvent.unavailables|=MB_CODE_CONV(EMB_SURROUNDING_VEH_BEHAVIOUR_HEADING_PATH_HISTORY);
 		}
@@ -1541,10 +1765,10 @@ void MisbehaviourDetector::processDENM(proton::binary message_bin, ldmmap::event
 			}
 
 			if (lastMessagePresent) {
-				if (abs(evedata.eventSpeed.getData()-vehdata.speed_ms)>5) {
+				if (fabs(evedata.eventSpeed.getData()-vehdata.speed_ms)>5) {
 					currentEvent.EMB_CODE|=MB_CODE_CONV(EMB_IRC_EVENT_SPEED_INC);	
 				}
-				if (abs(evedata.eventPositionHeading.getData()-vehdata.heading)>10) {
+				if (fabs(evedata.eventPositionHeading.getData()-vehdata.heading)>10) {
 					currentEvent.EMB_CODE|=MB_CODE_CONV(EMB_IRC_EVENT_HEADING_INC);
 				}
 			} else {
@@ -1637,6 +1861,11 @@ void MisbehaviourDetector::eventDecision(pendingEvent_t currentEvent) {
 		m_already_reported_mutex.unlock();
 
 		if (currentEvent.EMB_CODE) {
+			for (auto p:misbehaviourStringsEvent) {
+				if (currentEvent.EMB_CODE&(1<<p.first)) {
+					misbehavioursDENM[p.first]++;
+				}
+			}
 			if (msgNumber%10==1 || msgNumber%10==2) { // update logs every 10 misbehaviours
 				fflush(log_csv);
 
@@ -1656,18 +1885,9 @@ void MisbehaviourDetector::eventDecision(pendingEvent_t currentEvent) {
 				}
 				fprintf(log_summary,"DENM MISBEHAVIOURS:\n");
 				for (auto p:misbehaviourStringsEvent) {
-					if (currentEvent.EMB_CODE&(1<<p.first)) {
-						misbehavioursDENM[p.first]++;
-					}
 					fprintf(log_summary,"%d:\t\t%s\n",misbehavioursDENM[p.first],p.second.c_str());
 				}
 				fflush(log_summary);
-			} else { // else only update the counters
-				for (auto p:misbehaviourStringsEvent) {
-					if (currentEvent.EMB_CODE&(1<<p.first)) {
-						misbehavioursDENM[p.first]++;
-					}
-				}
 			}
 		}
 	} else {

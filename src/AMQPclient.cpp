@@ -404,6 +404,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		certificateData.stationID=vehdata.stationID;
 		certificateData.msg_timestamp=vehdata.on_msg_timestamp_us;
 
+		// Enter detection if enabled, currently discards the message if any check is failed, in the future the reporting service should decide the action
 		if (m_MBDetection_enabled==true) {
 			MBD_retval=m_MBDetector_ptr->processCAM(message_bin,vehdata,sec_retval,certificateData);
 			if (MBD_retval!=0) {
@@ -427,7 +428,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		certificateData.stationID=evedata.originatingStationID;
 		certificateData.msg_timestamp=evedata.on_msg_timestampDENM_us;
 
-		// DENM is a special case where the MBD has to hold the events for further checks, so the client either calls MBD or inserts the event
+		// DENM is a special case where the MBD has to hold the events for further checks, so the client either calls MBD which will later insert the event or inserts the event without detection
 		if (m_MBDetection_enabled==true) {
 			m_MBDetector_ptr->processDENM(message_bin,evedata,sec_retval,certificateData);
 		} else {
@@ -474,10 +475,11 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 			certificateData.msg_timestamp=PO_vec.front().on_msg_timestamp_us;
 		}
 
+		// Enter detection if enabled, currently discards the message if any check is failed, in the future the reporting service should decide the action
 		if (m_MBDetection_enabled==true) {
 			MBD_retval=m_MBDetector_ptr->processCPM(message_bin,PO_vec,sec_retval,certificateData);
 			if (MBD_retval!=0) {
-				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<vehdata.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
+				std::cerr <<"[WARNING] Misbehaviour detected for vehicle " <<certificateData.stationID <<". Message discarded with MB_CODE " <<MBD_retval <<std::endl;
 				return;
 			}
 		}
@@ -499,6 +501,7 @@ AMQPClient::on_message(proton::delivery &d, proton::message &msg) {
 		certificateData.stationID=vehdata.stationID;
 		certificateData.msg_timestamp=vehdata.on_msg_timestamp_us;
 
+		// Enter detection if enabled, currently discards the message if any check is failed, in the future the reporting service should decide the action
 		if (m_MBDetection_enabled==true) {
 			MBD_retval=m_MBDetector_ptr->processVAM(message_bin,vehdata,sec_retval,certificateData);
 			if (MBD_retval!=0) {
@@ -684,10 +687,6 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 		vehdata.speed_ms=ldmmap::e_DataUnavailableValue::speed;
 	}
 	vehdata.gnTimestamp = gn_timestamp;
-	vehdata.gnLat = decodedData.gnLat;
-	vehdata.gnLon = decodedData.gnLon;
-	vehdata.gnSpeed = decodedData.gnSpeed;
-	vehdata.gnHeading = decodedData.gnHeading;
 	vehdata.stationID = stationID; // It is very important to save also the stationID
 	vehdata.camTimestamp = static_cast<long>(decoded_cam->cam.generationDeltaTime);
 	vehdata.stationType = static_cast<ldmmap::e_StationTypeLDM>(decoded_cam->cam.camParameters.basicContainer.stationType);
@@ -724,7 +723,7 @@ bool AMQPClient::decodeCAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 		vehdata.longitudinalAcceleration=ldmmap::e_DataUnavailableValue::longitudinalAcceleration;
 	}
 	if (decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.curvature.curvatureValue!=CurvatureValue_unavailable) {
-		vehdata.curvature=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.curvature.curvatureValue;
+		vehdata.curvature=decoded_cam->cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency.curvature.curvatureValue/10000.0;
 	} else {
 		vehdata.curvature=ldmmap::e_DataUnavailableValue::curvature;
 	}
@@ -1135,7 +1134,9 @@ bool AMQPClient::decodeCPM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 				PO_data.driveDirection=ldmmap::e_DataUnavailableValue::driveDirection;
 				if (PO_seq->zAngularVelocity!=nullptr) {
 					PO_data.yawRate = asn1cpp::getField(PO_seq->zAngularVelocity->value,long);
-					if (PO_data.yawRate==CartesianAngularVelocityComponentValue_unavailable) {
+					if (PO_data.yawRate!=CartesianAngularVelocityComponentValue_unavailable) {
+						PO_data.yawRate=PO_data.yawRate/100.0;
+					} else {
 						PO_data.yawRate=ldmmap::e_DataUnavailableValue::yawRate;
 					}
 				} else {
@@ -1332,11 +1333,30 @@ bool AMQPClient::decodeVAM(etsiDecoder::etsiDecodedData_t decodedData, proton::m
 	
 	vehdata.elevation = decoded_vam->vam.vamParameters.basicContainer.referencePosition.altitude.altitudeValue/100.0;
 
-	if(decoded_vam->vam.vamParameters.vruHighFrequencyContainer.heading.value==Wgs84AngleValue_unavailable) {
-		vehdata.heading = LDM_HEADING_UNAVAILABLE;
-	} else {
+	if(decoded_vam->vam.vamParameters.vruHighFrequencyContainer.heading.value!=Wgs84AngleValue_unavailable) {
 		vehdata.heading = decoded_vam->vam.vamParameters.vruHighFrequencyContainer.heading.value/10.0;
+	} else {
+		vehdata.heading = ldmmap::e_DataUnavailableValue::heading;
 	}
+
+	if (decoded_vam->vam.vamParameters.vruHighFrequencyContainer.curvature!=nullptr) {
+		if(decoded_vam->vam.vamParameters.vruHighFrequencyContainer.curvature->curvatureValue!=CurvatureValue_unavailable) {
+			vehdata.curvature = decoded_vam->vam.vamParameters.vruHighFrequencyContainer.curvature->curvatureValue/10000.0;
+		} else {
+			vehdata.curvature = ldmmap::e_DataUnavailableValue::curvature;
+		}
+	} else {
+		vehdata.curvature = ldmmap::e_DataUnavailableValue::curvature;
+	}
+
+	if (decoded_vam->vam.vamParameters.vruHighFrequencyContainer.yawRate!=nullptr) {
+		if(decoded_vam->vam.vamParameters.vruHighFrequencyContainer.yawRate->yawRateValue!=YawRateValue_unavailable) {
+			vehdata.heading = decoded_vam->vam.vamParameters.vruHighFrequencyContainer.yawRate->yawRateValue/100.0;
+		} else {
+			vehdata.heading = ldmmap::e_DataUnavailableValue::yawRate;
+		}
+	}
+	
 	
 	vehdata.speed_ms = decoded_vam->vam.vamParameters.vruHighFrequencyContainer.speed.speedValue/100.0;
 	vehdata.camTimestamp = static_cast<long>(decoded_vam->vam.generationDeltaTime);

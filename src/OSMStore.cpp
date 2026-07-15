@@ -57,26 +57,73 @@ public:
     
             HighwayInfo_t info;
             std::string width_str=way.tags().get_value_by_key("width","");
-            width_str="";
             if (width_str=="") {
                 width_str=way.tags().get_value_by_key("lanes","");
                 if (width_str=="") {
-                    info.width=3;
+                    info.width=6;
                 } else {
-                    info.width=std::stoi(width_str)*3;
+                    info.width=std::stoi(width_str)*4;
                 }
             } else {
-                info.width=std::stoi(width_str);
+                std::stringstream ss(width_str);
+                double width;
+                ss >> width;
+                std::string unit;
+                ss >> unit;
+                if (unit.empty() || unit=="m") {
+                    info.width=width;
+                } else if (unit=="km") {
+                    info.width=width*1000;
+                } else if (unit=="mi") {
+                    info.width=width*1609.344;
+                } else if (unit=="yd") {
+                    info.width=width*0.9144;
+                } else if (unit=="'") {
+                    info.width=width*0.3048;
+                    ss >> width;
+                    if (!ss.fail()) {
+                        info.width+=width*0.0254;
+                    }
+                } else {
+                    width_str=way.tags().get_value_by_key("lanes","");
+                    if (width_str=="") {
+                        info.width=6;
+                    } else {
+                        info.width=std::stoi(width_str)*3;
+                    }
+                }
             }
+
             std::string maxSpeed_str=way.tags().get_value_by_key("maxspeed","");
-            // possibly need to insert the measuring unit check
-            maxSpeed_str="";
-            if (maxSpeed_str=="") {
-                // if no maxspeed tag is present get the default for the road type
+            if (maxSpeed_str=="" || maxSpeed_str=="walk" || maxSpeed_str=="signals" || maxSpeed_str=="none") {
                 maxSpeed_str=way.tags().get_value_by_key("highway","");
                 info.maxSpeed=maxSpeedByRoadType[maxSpeed_str];
             } else {
-                info.maxSpeed=std::stof(maxSpeed_str);
+                std::stringstream ss(maxSpeed_str);
+                double maxSpeed;
+                ss >> maxSpeed;
+                if (ss.fail()) {
+                    maxSpeed_str=way.tags().get_value_by_key("highway","");
+                    info.maxSpeed=maxSpeedByRoadType[maxSpeed_str];
+                } else {
+                    std::string unit;
+                    ss >> unit;
+                    if (unit.empty() || unit=="km/h") {
+                        info.maxSpeed=maxSpeed/3.6; // convert to m/s
+                    } else if (unit=="mph") {
+                        info.maxSpeed=maxSpeed*0.447; // from mph to m/s
+                    } else {
+                        maxSpeed_str=way.tags().get_value_by_key("highway","");
+                        info.maxSpeed=maxSpeedByRoadType[maxSpeed_str];
+                    }
+                }
+            }
+
+            std::string oneway_str=way.tags().get_value_by_key("oneway","");
+            if (oneway_str=="") {
+                info.oneway=false;
+            } else {
+                info.oneway=(oneway_str=="yes");
             }
             highways_info.emplace(way.id(),info);
         }
@@ -153,7 +200,8 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon, i
         
         std::string url="https://overpass-api.de/api/interpreter";
         std::string query=
-            "("
+            "[out:xml][timeout:60];"
+                "("
                 // [highway=pedestrian] may be used by vehicles, remove from filtered out tags if necessary
                 "way[highway]"
                 "[highway!=\"busway\"][highway!=\"cycleway\"][highway!=\"footway\"][highway!=\"path\"]"
@@ -167,11 +215,22 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon, i
             "(._;>;);"
             "out;";
         CURL *curl=curl_easy_init();
+        
+        char *escaped=curl_easy_escape(curl, query.c_str(), query.size());
+        std::string postData="data="+std::string(escaped);
+        curl_free(escaped);
+
+        //curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+        struct curl_slist *headers = nullptr;
+        headers = curl_slist_append(headers,"Content-Type: application/x-www-form-urlencoded");
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(curl,CURLOPT_URL,url.c_str()); 
         curl_easy_setopt(curl,CURLOPT_POST, 1L);
-        curl_easy_setopt(curl,CURLOPT_POSTFIELDS,query.c_str());
-        curl_easy_setopt(curl,CURLOPT_POSTFIELDSIZE,query.length());
+        curl_easy_setopt(curl,CURLOPT_POSTFIELDS,postData.c_str());
+        curl_easy_setopt(curl,CURLOPT_POSTFIELDSIZE,postData.length());
 
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, "s-ldm-client/1.0");
+        
         std::string file="maps/map.osm";
         FILE *fp=fopen(file.c_str(),"w");
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallbackOSM);
@@ -182,6 +241,7 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon, i
         if (res!=CURLE_OK) {
             std::cout <<"Curl error: " <<res <<std::endl;
         }
+        curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
     }
 
@@ -200,7 +260,6 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon, i
         osmium::apply(reader,loc_handler,handler);
 
         reader.close();
-        //std::remove("map.osm");
 
         for (auto w:highways_info) {
             m_highways_info.emplace(w.first,w.second);
@@ -211,7 +270,6 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon, i
         std::cerr <<e.what() <<std::endl;
     }
 
-    // int max_size=250; // in meters in theory
     m_minlat=minlat;
     m_minlon=minlon;
     int lat_slice=1;
@@ -286,7 +344,7 @@ void OSMStore::printAll() {
     fclose(fout);
 }
 
-osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon, double distance) {
+osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon, double &distance, osmium::object_id_type lastWay) {
     osmium::object_id_type closestWay;
     double closestDist=2e10;
 
@@ -299,7 +357,6 @@ osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon, doub
     if (j>lonSectors) {j=lonSectors;}
     std::tuple<int,int> index(i,j);
 
-    int counter=0;
     for (auto way:m_highways_by_sector.at(index)) {
         double dist=boost::geometry::distance(p,way.second);
         if (dist<closestDist) {
@@ -307,7 +364,15 @@ osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon, doub
             closestWay=way.first;
             // check if the distance is less than the width
             // if distance is not 0 it means the check is "close to road" and not "on road"
-            if (dist<highways_info.at(way.first).width+distance) break;
+
+            // commented out to find the best match (could have more roads in range)
+            // potentially see if there are multiple 0  distance choices and pick the right one based on heading
+            // if (dist<highways_info.at(way.first).width+distance) break;
+
+            // different approach,if it's not the first message check if the road selected before is in distance
+            if (way.first==lastWay && closestDist<highways_info.at(closestWay).width+distance) {
+                break;
+            }
         }
     }
 
@@ -317,17 +382,15 @@ osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon, doub
     //std::cout <<"\nTime for onRoad calculations in us: " <<tB-tA;
     //std::cout <<"\nCurrent average time for onRoad calculations in us: " <<sumPositionOnRoad/countPositionOnRoad;
 
-    if (closestDist<3) {
-        //std::cout <<"\nClose enough. Closest way: " <<closestWay <<" Distance: " <<closestDist <<std::endl;
-    } else {
+    if (closestDist>highways_info.at(closestWay).width+distance) {
         closestWay=-1;
-        //std::cout <<"\nNot close enough. Closest way: " <<closestWay <<" Distance: " <<closestDist <<std::endl;
     }
+    distance=closestDist;
 
     return closestWay;
 }
 
-bool OSMStore::checkHeadingMatchesRoad(double heading, double lat, double lon, osmium::object_id_type highwayID) {
+bool OSMStore::checkHeadingMatchesRoad(double heading, double lat, double lon, osmium::object_id_type highwayID, double &roadHeading) {
     bool retval=false;
     double tolerance=0.2;
 
@@ -342,6 +405,7 @@ bool OSMStore::checkHeadingMatchesRoad(double heading, double lat, double lon, o
     if (j>lonSectors) {j=lonSectors;}
     std::tuple<int,int> index(i,j);
     way_linestring way=m_highways_by_sector.at(index).at(highwayID);
+    bool oneway=m_highways_info.at(highwayID).oneway;
 
     point2d p(lat,lon);
     for (int i=0;i<way.size();i++) {
@@ -354,7 +418,6 @@ bool OSMStore::checkHeadingMatchesRoad(double heading, double lat, double lon, o
     const double radiansFactor=M_PI/180;
     double dLat;
     double dLon;
-    //std::cout <<"\nHeading: " <<heading;
     if (closestIndex>0) {
         double dLat = (way.at(closestIndex).x() - way.at(closestIndex-1).x()) * radiansFactor;
         double dLon = (way.at(closestIndex).y() - way.at(closestIndex-1).y()) * radiansFactor;
@@ -363,9 +426,11 @@ bool OSMStore::checkHeadingMatchesRoad(double heading, double lat, double lon, o
         if (heading<prevToClosestNodeHeading*(1+tolerance) && heading>prevToClosestNodeHeading*(1+tolerance)) {
             retval=true;
         } else { //to check opposite driving direction needs to be skipped if the road is one-way only
-            heading=fmod(heading+180,360);
-            if (heading<prevToClosestNodeHeading*(1+tolerance) && heading>prevToClosestNodeHeading*(1+tolerance)) {
-                retval=true;
+            if (!oneway) {
+                heading=fmod(heading+180,360);
+                if (heading<prevToClosestNodeHeading*(1+tolerance) && heading>prevToClosestNodeHeading*(1+tolerance)) {
+                    retval=true;
+                }
             }
         }
     }
@@ -378,9 +443,11 @@ bool OSMStore::checkHeadingMatchesRoad(double heading, double lat, double lon, o
         if (heading<closestToNextNodeHeading*(1+tolerance) && heading>closestToNextNodeHeading*(1+tolerance)) {
             retval=true;
         } else { //to check opposite driving direction needs to be skipped if the road is one-way only
-            heading=fmod(heading+180,360);
-            if (heading<closestToNextNodeHeading*(1+tolerance) && heading>closestToNextNodeHeading*(1+tolerance)) {
-                retval=true;
+            if (!oneway) {
+                heading=fmod(heading+180,360);
+                if (heading<closestToNextNodeHeading*(1+tolerance) && heading>closestToNextNodeHeading*(1+tolerance)) {
+                    retval=true;
+                }
             }
         }
     }
@@ -407,7 +474,6 @@ bool OSMStore::checkIfPointInBuilding(double lat, double lon) {
     if (j>lonSectors) {j=lonSectors;}
     std::tuple<int,int> index(i,j);
 
-    int counter=0;
     for (auto building:m_buildings_by_sector.at(index)) {
         if (boost::geometry::covered_by(p,building.second)) {
             retval=true;
@@ -425,9 +491,10 @@ bool OSMStore::checkIfPointInBuilding(double lat, double lon) {
     return retval;
 }
 
-bool OSMStore::checkSpeedOverTypeLimit(double speed, osmium::object_id_type highwayID) {
+bool OSMStore::checkSpeedOverTypeLimit(double speed, osmium::object_id_type highwayID, double &speedLimit) {
     bool retval=false;
-    if (speed>highways_info.at(highwayID).maxSpeed) {
+    speedLimit=highways_info.at(highwayID).maxSpeed;
+    if (speed>speedLimit) {
         retval=true;
     }
     return retval;

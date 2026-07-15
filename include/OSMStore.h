@@ -18,6 +18,7 @@ using way_polygon = boost::geometry::model::polygon<point2d>;
 typedef struct HighwayInfo_s {
     int width;
     double maxSpeed;
+    bool oneway;
 } HighwayInfo_t;
 
 class OSMStore {
@@ -25,17 +26,17 @@ public:
     
     OSMStore(double minlat, double minlon, double maxlat, double maxlon, int max_size);
 
-    // returns the highway id that matches the distance constraint, if no highway is found returns -1
-    osmium::object_id_type checkIfPointOnRoad(double lat, double lon, double distance=0);
+    // returns the highway id that matches the distance constraint, if no highway is found returns -1, distance is then overwritten with the distance from the closest road
+    osmium::object_id_type checkIfPointOnRoad(double lat, double lon, double &distance, osmium::object_id_type lastWay=-1);
 
-    // return true is heading is consistent with the road, false otherwise
-    bool checkHeadingMatchesRoad(double heading, double lat, double lon, osmium::object_id_type highwayID);
+    // return true is heading is consistent with the road, false otherwise, roadHeading is used to return the heading of the road
+    bool checkHeadingMatchesRoad(double heading, double lat, double lon, osmium::object_id_type highwayID, double &roadHeading);
 
     // returns true if position is inside a building, false otherwise
     bool checkIfPointInBuilding(double lat, double lon);
 
-    // return true if speed is over the road type limit
-    bool checkSpeedOverTypeLimit(double speed, osmium::object_id_type highwayID);
+    // return true if speed is over the road type limit, speedLimit is used to return the speed limit of the road
+    bool checkSpeedOverTypeLimit(double speed, osmium::object_id_type highwayID, double &speedLimit);
 
     bool checkIfPointIsStop(double lat, double lon, bool isBusStop);
 

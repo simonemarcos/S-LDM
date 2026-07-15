@@ -12,7 +12,7 @@
 
 // shift for bitmap operations
 #define MB_CODE_CONV(MB_CODE) 1<<MB_CODE
-#define MB_CODE_CLEAR(MB_CODE) !MB_CODE_CONV(MB_CODE)
+#define MB_CODE_CLEAR(MB_CODE) ~MB_CODE_CONV(MB_CODE)
 
 // returns true if misbehavour is detected false otherwise
 #define MB_CODE_CHECK(MB_CODE,FIELD_N) ((1<<FIELD_N) & MB_CODE)!=0
@@ -32,6 +32,7 @@ typedef struct MBDOptions {
 	bool ignoreSecurity;
 	double cpmToleranceMultiplier;
 	std::string weatherAPIKey;
+	bool discardOnMisbehaviour;
 } MBDOptions_t;
 
 typedef struct pendingEvent {
@@ -91,6 +92,13 @@ class MisbehaviourDetector {
 			MB_MOVEMENT_CONTROL,
 			MB_ENVIRONMENT,
 
+			// security related
+			MB_NO_SECURITY,
+			MB_INVALID_CERTIFICATE,
+			MB_DIGEST_EXPIRED,
+			MB_DIGEST_NOT_FOUND,
+
+
 			//class 2
 			MB_BEACON_FREQ_INC,
 			// The following codes correspond to: [first_name] change inconsistent with [second_name]
@@ -124,7 +132,7 @@ class MisbehaviourDetector {
 
 			// Traffic Jam
 			EMB_ROAD_TYPE,
-			EMB_EVENT_HISTORY_INC,
+				// EMB_EVENT_HISTORY_INC,
 			EMB_UNLIKELY_STATISTICS,
 			EMB_UNLIKELY_NEARBY_VEHICLES,
 			// Traffic Jam, Dangerous end of queue
@@ -197,13 +205,13 @@ class MisbehaviourDetector {
 		uint64_t processVAM(proton::binary message_bin, ldmmap::vehicleData_t vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
 		uint64_t processCPM(proton::binary message_bin, std::vector<ldmmap::vehicleData_t> PO_vec, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
 		void cleanupPendingEvents();
-
+		
 		// "protected" just in case new classes will be derived from this one
 	protected:
-		std::mutex m_already_reported_mutex;
+	std::mutex m_already_reported_mutex;
 		std::set<uint64_t> m_already_reported; // List of vehicles for which a report has been sent already (potentially use to not trust them)
 		
-	private:
+		private:
 		std::string m_logfile_name;
 		FILE *m_logfile_file;
 
@@ -220,27 +228,25 @@ class MisbehaviourDetector {
 		std::map<uint64_t, pendingEvent_t> m_pendingEvents;
 
 		std::map<int,ldmmap::vehicleData_t> averages, deviations;
-		std::map<int,double> maxSpeeds, maxAccelerations, maxCurvatures, maxYawRates;
-		std::map<int,double> maxBrakings; //absolute values of acceleration during braking
+		std::map<int,double> maxSpeeds, maxAccelerations, maxLateralAcceleration, maxYawRates;
+		std::map<int,double> minAccelerations; //used for negative acceleration (braking)
 		std::map<int,double> maxJerks;
 		std::map<int,long> vehicleMasses;
 
 		uint64_t weatherTimestamp;
 		int picto, picto_detailed;
-
+		
 		std::vector<int> misbehavioursCAM, misbehavioursVAM, misbehavioursCPM, misbehavioursDENM;
-		FILE *log_summary;
-		FILE *log_csv;
 		int msgNumber;
 		
-		// to reuse the checks on CPMs set tolMult on values >1 for increased tolerance, default is 1
-		uint64_t individualCAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables, double tolMult=1);
-		// to reuse the checks on CPMs set tolMult on values >1 for increased tolerance, default is 1
-		uint64_t individualVAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables, double tolMult=1);
+		// to reuse the checks on CPMs set msgType=CPM for increased tolerance, default is msgType=CAM
+		uint64_t individualCAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables, int msgType=CAM);
+		// to reuse the checks on CPMs set msgType=CPM for increased tolerance, default is msgType=VAM
+		uint64_t individualVAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables, int msgType=VAM);
 		uint64_t individualCPMchecks(std::vector<ldmmap::vehicleData_t> PO_vec, uint64_t &unavailables);
 		uint64_t individualDENMchecks(ldmmap::eventData_t evedata, uint64_t &unavailables, bool &pending);
 		void eventDecision(pendingEvent_t currentEvent);
 		void Init(double minlat, double minlon, double maxlat, double maxlon);
-};
+	};
 
 #endif // MB_DETECTOR_H

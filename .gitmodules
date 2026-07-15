@@ -1,7 +1,7 @@
 [submodule "gnn"]
 	path = gnn
-	url = https://github.com/aledima00/sldm-gnn.git
+	url = https://github.com/DriveX-devs/sldm-gnn.git
 	branch = main
 [submodule "dataset-generator"]
 	path = dataset-generator
-	url = https://github.com/aledima00/sumo-dataset-generator.git
+	url = https://github.com/DriveX-devs/sumo-dataset-generator.git

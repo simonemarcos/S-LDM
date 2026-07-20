@@ -4,6 +4,7 @@
 #include <cinttypes>
 #include <cstddef>
 #include "named_enums.h"
+#include "geonet.h"
 
 #define ETSI_DECODER_OK 	0
 #define ETSI_DECODER_ERROR 	1
@@ -14,7 +15,9 @@
 // MSGTYPE(<message name>,<messageID>)
 #define MSGTYPES(MSGTYPE) \
 	MSGTYPE(DENM,=1) \
-	MSGTYPE(CAM,=2)
+	MSGTYPE(CAM,=2) \
+	MSGTYPE(CPM,=3) \
+	MSGTYPE(VAM, =4)
 
 NAMED_ENUM_DECLARE(etsi_message_t,MSGTYPES);
 
@@ -25,10 +28,12 @@ namespace etsiDecoder {
 		ETSI_DECODED_DENM,
 		ETSI_DECODED_IVIM,
 		ETSI_DECODED_CPM,
+		ETSI_DECODED_VAM,
 		ETSI_DECODED_CAM_NOGN,
 		ETSI_DECODED_DENM_NOGN,
 		ETSI_DECODED_IVIM_NOGN,
-		ETSI_DECODED_CPM_NOGN
+		ETSI_DECODED_CPM_NOGN,
+		ETSI_DECODED_VAM_NOGN
 	} etsiDecodedType_e;
 
 	typedef struct etsiDecodedData {
@@ -36,12 +41,18 @@ namespace etsiDecoder {
 		etsiDecodedType_e type;
 
 		uint32_t gnTimestamp;
+		uint8_t GNaddress[8];
 		//For DENMs GeoArea
 		int32_t posLong;
 		int32_t posLat;
 		uint16_t distA;
 		uint16_t distB;
 		uint16_t angle;
+		//For geonet checks
+		int32_t gnLat;
+	    int32_t gnLon;
+		int16_t gnSpeed;
+		uint16_t gnHeading;
 	} etsiDecodedData_t;
 
 	class decoderFrontend {
@@ -59,11 +70,12 @@ namespace etsiDecoder {
 			} msgType_e;
 
 			decoderFrontend();
-			int decodeEtsi(uint8_t *buffer,size_t buflen,etsiDecodedData_t &decoded_data, msgType_e msgtype = MSGTYPE_ITS);
+			int decodeEtsi(uint8_t *buffer,size_t buflen,etsiDecodedData_t &decoded_data, Security::Security_error_t &sec_retval,storedCertificate_t &certificateData, msgType_e msgtype = MSGTYPE_ITS);
 			void setPrintPacket(bool print_pkt) {m_print_pkt=print_pkt;}
 
 		private:
 			bool m_print_pkt;
+			GeoNet geonet;
 	};
 }
 

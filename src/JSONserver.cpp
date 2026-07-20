@@ -16,11 +16,6 @@
 #define GET_INT(json,key) (json[key].int_value())
 #define GET_STR(json,key) (json[key].string_value())
 
-static inline double haversineDist(double lat_a, double lon_a, double lat_b, double lon_b) {
-	// 12742000 is the mean Earth radius (6371 km) * 2 * 1000 (to convert from km to m)
-	return 12742000.0*asin(sqrt(sin(DEG_2_RAD(lat_b-lat_a)/2)*sin(DEG_2_RAD(lat_b-lat_a)/2)+cos(DEG_2_RAD(lat_a))*cos(DEG_2_RAD(lat_b))*sin(DEG_2_RAD(lon_b-lon_a)/2)*sin(DEG_2_RAD(lon_b-lon_a)/2)));
-}
-
 void *JSONthread_callback(void *arg) {
 	fd_set sockdescrs,rd_sockdescrs;
 	std::set<int> sockdescrs_set = {};
@@ -150,7 +145,7 @@ json11::Json::object JSONserver::make_SLDM_json(double lat, double lon, double r
 		fprintf(stdout,"[INFO] No range specified in JSON-over-TCP request. Using default value of %.2lf m.\n",range);
 	}
 
-	if(m_db_ptr->rangeSelect(range,lat,lon,returnedvehs)!=ldmmap::LDMMap::LDMMAP_OK) {
+	if(m_db_ptr->rangeSelectVehicle(range,lat,lon,returnedvehs)!=ldmmap::LDMMap::LDMMAP_OK) {
 		AIM_json["return_code"] = json11::Json("error");
 		return AIM_json;
 	} else {

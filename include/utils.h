@@ -12,6 +12,7 @@
 #define POLL_DEFINE_JUNK_VARIABLE() long int junk
 #define POLL_CLEAR_EVENT(clockFd) junk=read(clockFd,&junk,sizeof(junk))
 
+uint64_t get_timestamp_s(void);
 uint64_t get_timestamp_us(void);
 uint64_t get_timestamp_ns(void);
 uint64_t get_timestamp_ms_gn(void);

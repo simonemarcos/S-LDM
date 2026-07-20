@@ -1,0 +1,11 @@
+# version: "3.8"
+services:
+  activemq:
+    build: .
+    ports:
+      - "8161:8161"
+      - "61616:61616"
+      - "5672:5672"
+      - "61613:61613"
+      - "5867:5867"
+    container_name: activemq

@@ -25,6 +25,8 @@ asn_TYPE_operation_t asn_OP_IA5String = {
 	OCTET_STRING_encode_der,
 	OCTET_STRING_decode_xer_utf8,
 	OCTET_STRING_encode_xer_utf8,
+	OCTET_STRING_decode_jer_utf8,
+    OCTET_STRING_encode_jer_utf8,
 #ifdef	ASN_DISABLE_OER_SUPPORT
 	0,
 	0,

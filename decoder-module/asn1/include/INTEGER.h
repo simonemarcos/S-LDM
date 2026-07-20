@@ -35,6 +35,11 @@ typedef struct asn_INTEGER_specifics_s {
 	int field_unsigned;			/* Signed=0, unsigned=1 */
 } asn_INTEGER_specifics_t;
 
+ssize_t INTEGER__dump(const asn_TYPE_descriptor_t *td,
+                      const INTEGER_t *st,
+                      asn_app_consume_bytes_f *cb,
+                      void *app_key, int plainOrXER);
+
 #define INTEGER_free    ASN__PRIMITIVE_TYPE_free
 #define INTEGER_decode_ber	ber_decode_primitive
 #define INTEGER_constraint	asn_generic_no_constraint
@@ -43,6 +48,8 @@ asn_struct_compare_f INTEGER_compare;
 der_type_encoder_f INTEGER_encode_der;
 xer_type_decoder_f INTEGER_decode_xer;
 xer_type_encoder_f INTEGER_encode_xer;
+jer_type_decoder_f INTEGER_decode_jer;
+jer_type_encoder_f INTEGER_encode_jer;
 oer_type_decoder_f INTEGER_decode_oer;
 oer_type_encoder_f INTEGER_encode_oer;
 per_type_decoder_f INTEGER_decode_uper;

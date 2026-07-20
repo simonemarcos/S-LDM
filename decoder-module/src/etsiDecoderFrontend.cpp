@@ -9,6 +9,8 @@
 extern "C" {
 	#include "CAM.h"
 	#include "DENM.h"
+	#include "CPM.h"
+	#include "VAM.h"
 }
 
 NAMED_ENUM_DEFINE_FCNS(etsi_message_t,MSGTYPES);
@@ -18,7 +20,7 @@ namespace etsiDecoder {
 		m_print_pkt = false;
 	}
 
-	int decoderFrontend::decodeEtsi(uint8_t *buffer,size_t buflen,etsiDecodedData_t &decoded_data,msgType_e msgtype) {
+	int decoderFrontend::decodeEtsi(uint8_t *buffer,size_t buflen,etsiDecodedData_t &decoded_data,Security::Security_error_t &sec_retval,storedCertificate_t &certificateData,msgType_e msgtype) {
 		bool isGeoNet = true;
 
 		if(buflen<=0) {
@@ -54,21 +56,20 @@ namespace etsiDecoder {
 		asn_dec_rval_t decode_result;
 
 		if(isGeoNet == true) {
-			GeoNet geonet;
 			btp BTP;
 			GNDataIndication_t gndataIndication;
 			BTPDataIndication_t btpDataIndication;
-
-			if(geonet.decodeGN(buffer,&gndataIndication)!= GN_OK)
+			gndataIndication.lenght=buflen;
+			if(geonet.decodeGN(buffer,&gndataIndication,sec_retval,certificateData)!= GN_OK)
 			  {
 			    std::cerr << "[WARN] [Decoder] Warning: GeoNet unable to decode a received packet." << std::endl;
-			    return ETSI_DECODED_ERROR;
+			    return ETSI_DECODER_ERROR;
 			  }
 
 			if(BTP.decodeBTP(gndataIndication,&btpDataIndication)!= BTP_OK)
 			  {
 			    std::cerr << "[WARN] [Decoder] Warning: BTP unable to decode a received packet." << std::endl;
-			    return ETSI_DECODED_ERROR;
+			    return ETSI_DECODER_ERROR;
 			  }
 
 			if(m_print_pkt==true) {
@@ -80,6 +81,10 @@ namespace etsiDecoder {
 			}
 
 			decoded_data.gnTimestamp = gndataIndication.SourcePV.TST;
+			decoded_data.gnLat = gndataIndication.SourcePV.latitude;
+			decoded_data.gnLon = gndataIndication.SourcePV.longitude;
+			decoded_data.gnSpeed = gndataIndication.SourcePV.speed;
+			decoded_data.gnHeading = gndataIndication.SourcePV.heading;
 
 			if(btpDataIndication.destPort == CA_PORT) {
 				decoded_data.type = ETSI_DECODED_CAM;
@@ -108,6 +113,29 @@ namespace etsiDecoder {
 					if(decoded_) free(decoded_);
 					return ETSI_DECODER_ERROR;
 				}
+			} else if(btpDataIndication.destPort == CP_PORT) {
+
+				decoded_data.type = ETSI_DECODED_CPM;
+
+				decode_result = asn_decode(0, ATS_UNALIGNED_BASIC_PER, &asn_DEF_CPM, &decoded_, btpDataIndication.data, btpDataIndication.lenght);
+				
+				if (decode_result.code!=RC_OK || decoded_==nullptr) {
+					std::cerr <<"[WARN] [Decoder] Warning: unable to decode a received CPM." << std::endl;
+					if(decoded_) free(decoded_);
+					return ETSI_DECODER_ERROR;
+				}
+			} else if (btpDataIndication.destPort == VA_PORT) {
+
+				decoded_data.type = ETSI_DECODED_VAM;
+
+				decode_result = asn_decode(0, ATS_UNALIGNED_BASIC_PER, &asn_DEF_VAM, &decoded_, btpDataIndication.data, btpDataIndication.lenght);
+
+				if (decode_result.code!=RC_OK || decoded_==nullptr) {
+					std::cerr <<"[WARN] [Decoder] Warning: unable to decode a received VAM." << std::endl;
+					if(decoded_) free(decoded_);
+					return ETSI_DECODER_ERROR;
+				}
+			// CPMs and VAMs supported now
 			// Only CAMs and DENMs are supported for the time being
 			} else {
 				decoded_data.type = ETSI_DECODED_ERROR;
@@ -136,6 +164,26 @@ namespace etsiDecoder {
 
 					if(decode_result.code!=RC_OK || decoded_==nullptr) {
 						std::cerr << "[WARN] [Decoder] Warning: unable to decode a received DENM (no BTP/GN)." << std::endl;
+						if(decoded_) free(decoded_);
+						return ETSI_DECODER_ERROR;
+					}
+				} else if (messageID==CPM) {
+					decoded_data.type = ETSI_DECODED_CAM_NOGN;
+
+					decode_result = asn_decode(0, ATS_UNALIGNED_BASIC_PER, &asn_DEF_CPM, &decoded_, buffer, buflen);
+
+					if(decode_result.code!=RC_OK || decoded_==nullptr) {
+						std::cerr << "[WARN] [Decoder] Warning: unable to decode a received CPM (no BTP/GN)." << std::endl;
+						if(decoded_) free(decoded_);
+						return ETSI_DECODER_ERROR;
+					}
+				} else if (messageID==VAM) {
+					decoded_data.type = ETSI_DECODED_CAM_NOGN;
+
+					decode_result = asn_decode(0, ATS_UNALIGNED_BASIC_PER, &asn_DEF_VAM, &decoded_, buffer, buflen);
+
+					if(decode_result.code!=RC_OK || decoded_==nullptr) {
+						std::cerr << "[WARN] [Decoder] Warning: unable to decode a received VAM (no BTP/GN)." << std::endl;
 						if(decoded_) free(decoded_);
 						return ETSI_DECODER_ERROR;
 					}

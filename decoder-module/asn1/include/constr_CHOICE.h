@@ -47,6 +47,8 @@ ber_type_decoder_f CHOICE_decode_ber;
 der_type_encoder_f CHOICE_encode_der;
 xer_type_decoder_f CHOICE_decode_xer;
 xer_type_encoder_f CHOICE_encode_xer;
+jer_type_decoder_f CHOICE_decode_jer;
+jer_type_encoder_f CHOICE_encode_jer;
 oer_type_decoder_f CHOICE_decode_oer;
 oer_type_encoder_f CHOICE_encode_oer;
 per_type_decoder_f CHOICE_decode_uper;
@@ -54,6 +56,17 @@ per_type_encoder_f CHOICE_encode_uper;
 asn_outmost_tag_f CHOICE_outmost_tag;
 asn_random_fill_f CHOICE_random_fill;
 extern asn_TYPE_operation_t asn_OP_CHOICE;
+
+unsigned _fetch_present_idx(
+        const void *struct_ptr,
+        unsigned off,
+        unsigned size);
+
+void _set_present_idx(
+        void *sptr,
+        unsigned offset,
+        unsigned size,
+        unsigned present);
 
 /*
  * Return the 1-based choice variant presence index.

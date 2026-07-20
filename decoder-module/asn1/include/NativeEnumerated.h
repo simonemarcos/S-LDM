@@ -13,6 +13,7 @@
 #define	_NativeEnumerated_H_
 
 #include "NativeInteger.h"
+#include "ENUMERATED.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,6 +23,8 @@ extern asn_TYPE_descriptor_t asn_DEF_NativeEnumerated;
 extern asn_TYPE_operation_t asn_OP_NativeEnumerated;
 
 xer_type_encoder_f NativeEnumerated_encode_xer;
+jer_type_decoder_f NativeEnumerated_decode_jer;
+jer_type_encoder_f NativeEnumerated_encode_jer;
 oer_type_decoder_f NativeEnumerated_decode_oer;
 oer_type_encoder_f NativeEnumerated_encode_oer;
 per_type_decoder_f NativeEnumerated_decode_uper;
@@ -35,6 +38,12 @@ per_type_encoder_f NativeEnumerated_encode_uper;
 #define NativeEnumerated_decode_ber NativeInteger_decode_ber
 #define NativeEnumerated_encode_der NativeInteger_encode_der
 #define NativeEnumerated_decode_xer NativeInteger_decode_xer
+
+#if !defined(ASN_DISABLE_UPER_SUPPORT) || !defined(ASN_DISABLE_APER_SUPPORT)
+static int NativeEnumerated__compar_value2enum(
+        const void *ap,
+        const void *bp);
+#endif  /* !defined(ASN_DISABLE_UPER_SUPPORT) || !defined(ASN_DISABLE_APER_SUPPORT) */
 
 #ifdef __cplusplus
 }

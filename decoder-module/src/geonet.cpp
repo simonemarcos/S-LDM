@@ -40,15 +40,17 @@ namespace etsiDecoder {
     }
 
     gnError_e
-    GeoNet::decodeGN(unsigned char *packet, GNDataIndication_t* dataIndication)
+    GeoNet::decodeGN(unsigned char *packet, GNDataIndication_t* dataIndication, Security::Security_error_t &sec_retval, storedCertificate_t &certificateData)
     {
         basicHeader basicH;
         commonHeader commonH;
+        gnError_e retval=GN_OK;
 
         dataIndication->data = packet;
 
         basicH.removeHeader(dataIndication->data);
         dataIndication->data += 4;
+        dataIndication->lenght-=4;
         dataIndication->GNRemainingLife = basicH.GetLifeTime ();
         dataIndication->GNRemainingHL = basicH.GetRemainingHL ();
 
@@ -56,7 +58,7 @@ namespace etsiDecoder {
         //1)Check version field
         if(basicH.GetVersion() != m_GnPtotocolVersion && basicH.GetVersion() != 0)
         {
-            std::cerr<< "[ERROR] [Decoder] Incorrect version of GN protocol" << std::endl;
+            std::cerr<< "[ERROR] [Decoder] Incorrect version of GN protocol (expected version " << static_cast<unsigned int>(m_GnPtotocolVersion)<< ", received version"<< static_cast<unsigned int>(basicH.GetVersion()) << ")" << std::endl;
             return GN_VERSION_ERROR;
 
         } 
@@ -69,8 +71,16 @@ namespace etsiDecoder {
         if(basicH.GetNextHeader()==2) //a) if NH=0 or NH=1 proceed with common header procesing
         {
             //Secured packet
-            std::cerr << "[ERROR] [Decoder] Secured packet not supported" << std::endl;
-            return GN_SECURED_ERROR;
+            sec_retval=m_security.extractSecurePacket (*dataIndication, certificateData);
+            if (sec_retval == Security::SECURITY_VERIFICATION_FAILED) {
+                std::cout << "[INFO] [Decoder] Security extraction failed" << std::endl;
+                retval=GN_SECURED_ERROR;
+            } else {
+                std::cout << "[INFO] [Decoder] Security extraction successful" << std::endl;
+            }
+            
+        } else {
+            sec_retval=Security::SECURITY_NO_SEC;
         }
         if(!decodeLT(basicH.GetLifeTime(),&dataIndication->GNRemainingLife))
         {
@@ -109,7 +119,7 @@ namespace etsiDecoder {
                 std::cerr << "[ERROR] [Decoder] GeoNet packet not supported. GNType: " << static_cast<unsigned int>(dataIndication->GNType) << std::endl;
                 return GN_TYPE_ERROR;
         }
-        return GN_OK;
+        return retval;
     }
 
 

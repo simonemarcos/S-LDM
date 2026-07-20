@@ -31,3 +31,20 @@ The commands reported above will run the S-LDM container and grant it access to 
 After running the container, it can be started/stopped with `sudo docker container start sldm_container` and `sudo docker container stop sldm_container`.
 
 You can view, instead, the output of the S-LDM with `sudo docker logs sldm_container`.
+
+
+# Docker Compose commands for ActiveMQ instance
+Since having a containerized ActiveMQ instance may be useful for the development of the S-LDM, a docker configuration has been provided here in [activemq](./activemq/).
+
+The user can simly start using it with
+
+```bash
+cd activemq
+docker compose up --build -d
+```
+
+On the contrary, to terminate the instance it is sufficient to run
+```bash
+cd activemq
+docker compose down
+```

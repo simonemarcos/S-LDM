@@ -4,6 +4,11 @@
 #include <condition_variable>
 #include <thread>
 #include <time.h>
+#include <vector>
+#include <string>
+#include <sys/wait.h>
+#include <spawn.h>
+#include "curl/curl.h"
 
 #include "LDMmap.h"
 #include "vehicle-visualizer.h"
@@ -12,6 +17,7 @@
 #include "JSONserver.h"
 #include "utils.h"
 #include "timers.h"
+#include "frameBuffer.h"
 
 extern "C" {
 	#include "options.h"
@@ -23,6 +29,13 @@ extern "C" {
 
 #define DB_CLEANER_INTERVAL_SECONDS 1
 #define DB_DELETE_OLDER_THAN_SECONDS 1 // This value should NEVER be set greater than (5-DB_CLEANER_INTERVAL_SECONDS/60) minutes or (300-DB_CLEANER_INTERVAL_SECONDS) seconds - doing so may break the database age check functionality!
+#define GREEN_ESCAPE "\033[32m"
+#define YELLOW_ESCAPE "\033[33m"
+#define RED_ESCAPE "\033[31m"
+#define RESET_ESCAPE "\033[0m"
+
+#define MAX_VEHICLES_PER_FRAME 2000
+
 
 // Global atomic flag to terminate all the threads in case of errors
 std::atomic<bool> terminatorFlag;
@@ -37,7 +50,7 @@ std::condition_variable synccv;
 std::unordered_map<int,AMQPClient*> amqpclimap;
 std::mutex amqpclimutex;
 
-void AMQPclient_t(ldmmap::LDMMap *db_ptr,options_t *opts_ptr,std::string logfile_name,std::string clientID,unsigned int clientIndex,indicatorTriggerManager *itm_ptr,std::string quadKey_filter,AMQPClient *main_amqp_ptr) {
+void AMQPclient_t(ldmmap::LDMMap *db_ptr,options_t *opts_ptr,std::string logfile_name,std::string clientID,unsigned int clientIndex,indicatorTriggerManager *itm_ptr,std::string quadKey_filter,AMQPClient *main_amqp_ptr,MisbehaviourDetector *mbd_ptr,CertificateStore *certStore_ptr) {
 	if(clientIndex >= MAX_ADDITIONAL_AMQP_CLIENTS-1) {
 		fprintf(stderr,"[FATAL ERROR] Error: there is a bug in the code, which attemps to spawn too many AMQP clients.\nPlease report this bug to the developers.\n");
 		fprintf(stderr,"Bug details: client id: %s - client index: %u - max supported clients: %u\n",clientID.c_str(),clientIndex,MAX_ADDITIONAL_AMQP_CLIENTS-1);
@@ -62,6 +75,9 @@ void AMQPclient_t(ldmmap::LDMMap *db_ptr,options_t *opts_ptr,std::string logfile
 			if(opts_ptr->indicatorTrgMan_enabled==true) {
 				recvClient.setIndicatorTriggerManager(itm_ptr);
 			}
+
+			// Set Misbehaviour Detector in any case, if disabled messages will just pass through
+			recvClient.setMisbehaviourDetector(mbd_ptr);
 
 			// Set username, if specified
 			if(options_string_len(opts_ptr->amqp_broker_x[clientIndex].amqp_username)>0) {
@@ -117,15 +133,41 @@ typedef struct vizOptions {
 	options_t *opts_ptr;
 } vizOptions_t;
 
+typedef struct nnModelUpdaterOptions {
+	ldmmap::LDMMap *db_ptr;
+	uint64_t period_ms;
+	uint16_t max_frame_size;
+	uint16_t pack_size;
+	char *gnn_snapshot_path;
+	double sumo_netoffset_x;
+	double sumo_netoffset_y;
+	char *gnn_csv_out_path;
+	// other communication config parameters...
+} nnModelUpdaterOptions_t;
+
 void clearVisualizerObject(uint64_t id,void *vizObjVoidPtr) {
 	vehicleVisualizer *vizObjPtr = static_cast<vehicleVisualizer *>(vizObjVoidPtr);
 
 	vizObjPtr->sendObjectClean(std::to_string(id));
 }
 
+void clearEventVisualizerObject(uint64_t id,void *vizObjVoidPtr) {
+	vehicleVisualizer *vizObjPtr = static_cast<vehicleVisualizer *>(vizObjVoidPtr);
+
+	vizObjPtr->sendEventObjectClean(id);
+}
+
+struct cleanerArgs {
+	ldmmap::LDMMap *db_ptr;
+	CertificateStore *certStore_ptr;
+	MisbehaviourDetector *mbd_ptr;
+};
 void *DBcleaner_callback(void *arg) {
 	// Get the pointer to the database
-	ldmmap::LDMMap *db_ptr = static_cast<ldmmap::LDMMap *>(arg);
+	cleanerArgs *args = static_cast<cleanerArgs *>(arg);
+	ldmmap::LDMMap *db_ptr = args->db_ptr;
+	CertificateStore *certStore_ptr = args->certStore_ptr;
+	MisbehaviourDetector *mbd_ptr = args->mbd_ptr;
 
 	// Create a new timer
 	Timer tmr(DB_CLEANER_INTERVAL_SECONDS*1e3);
@@ -143,11 +185,26 @@ void *DBcleaner_callback(void *arg) {
 
 	POLL_DEFINE_JUNK_VARIABLE();
 
+	// used for cleanups that need to be done less frequently than DB_CLEANER_INTERVAL_SECONDS
+	int counter=0;
+
 	while(terminatorFlag == false && tmr.waitForExpiration()==true) {
 			// ---- These operations will be performed periodically ----
 
-			db_ptr->deleteOlderThanAndExecute(DB_DELETE_OLDER_THAN_SECONDS*1e3,clearVisualizerObject,static_cast<void *>(globVehVizPtr));
+			counter+=DB_CLEANER_INTERVAL_SECONDS;
+			// check every 30 seconds
+			if (counter%30==0) {
+				mbd_ptr->cleanupPendingEvents(); // cleanup for events that have been left pending
+				// check every 10 minutes
+				if (counter>=10*60) {
+					certStore_ptr->deleteOlderThan(10*60*1e3); //removing certificates older than 10 minutes
+					counter=0;
+				}
+			}
+			db_ptr->deleteVehicleOlderThanAndExecute(DB_DELETE_OLDER_THAN_SECONDS*1e3,clearVisualizerObject,static_cast<void *>(globVehVizPtr));
 
+			// Delete events older than the specified validity duration
+			db_ptr->deleteEventOlderThanAndExecute(clearEventVisualizerObject,static_cast<void *>(globVehVizPtr));
 			// --------
 	}
 
@@ -162,6 +219,13 @@ void updateVisualizer(ldmmap::vehicleData_t vehdata,void *vizObjVoidPtr) {
 	vehicleVisualizer *vizObjPtr = static_cast<vehicleVisualizer *>(vizObjVoidPtr);
 
 	vizObjPtr->sendObjectUpdate(std::to_string(vehdata.stationID),vehdata.lat,vehdata.lon,static_cast<int>(vehdata.stationType),vehdata.heading);
+}
+
+void updateEventVisualizer(ldmmap::eventData_t eveData,uint64_t key, void *vizObjVoidPtr) {
+	vehicleVisualizer *vizObjPtr = static_cast<vehicleVisualizer *>(vizObjVoidPtr);
+
+		vizObjPtr->sendEventObjectUpdate(key, eveData.eventLatitude, eveData.eventLongitude, eveData.eventElevation, eveData.eventCauseCode);
+		//printf("EVENT_KEY (Visualizer): %lu\n", key);
 }
 
 void *VehVizUpdater_callback(void *arg) {
@@ -205,7 +269,8 @@ void *VehVizUpdater_callback(void *arg) {
 
                         // ---- These operations will be performed periodically ----
 
-                        db_ptr->executeOnAllContents(&updateVisualizer, static_cast<void *>(&vehicleVisObj));
+                        db_ptr->executeOnAllVehicleContents(&updateVisualizer, static_cast<void *>(&vehicleVisObj));
+						db_ptr->executeOnAllEventContents(&updateEventVisualizer, static_cast<void *>(&vehicleVisObj));
 
 			// --------
 	}
@@ -217,7 +282,188 @@ void *VehVizUpdater_callback(void *arg) {
 	pthread_exit(nullptr);
 }
 
+typedef struct addVdToFrameArgs {
+	FrameBuffer *fbPtr;
+	uint64_t reftime_ms;
+	uint64_t window_size_ms;
+} addVdToFrameArgs_t;
+
+void addVdToFrame(ldmmap::vehicleData_t vehdata, void *args) {
+	addVdToFrameArgs_t *targs = static_cast<addVdToFrameArgs_t *>(args);
+	if(targs->reftime_ms-vehdata.gnTimestamp <= targs->window_size_ms) {
+		targs->fbPtr->add(&vehdata);
+	}
+	else{
+		std::cout << "Vehicle with stationID " << vehdata.stationID << " is outside the time window for the current frame. Not adding it to the frame buffer." << std::endl;
+	}
+}
+
+void randomFillFrameBuffer(FrameBuffer* fbPtr, int num_vehicles){
+	FrameBuffer::vehicleSnapshot_t vs;
+	vs.stationID = 1001;
+	vs.width = 1.8;
+	vs.length = 4.5;
+	vs.stationType = ldmmap::e_StationTypeLDM::StationType_LDM_passengerCar;
+	vs.x = 1.1;
+	vs.y = 2.2;
+	vs.speed = 10.0;
+	vs.heading = 45.0;
+	for(int i=0;i<num_vehicles;i++){
+		fbPtr->addCustom(&vs, get_timestamp_us());
+		vs.stationID++;
+		vs.x += 0.1;
+		vs.y += 0.1;
+		vs.heading += 0.5;
+	}
+}
+
+extern char **environ;
+pid_t uv_spawn_gnn(char *fifo_path, uint16_t pack_size, char *gnn_snapshot_path, char* gnn_csv_out_path) {
+	posix_spawn_file_actions_t fa;
+	posix_spawn_file_actions_init(&fa);
+
+	// ========= change working directory to gnn
+	int rc = posix_spawn_file_actions_addchdir_np(&fa, "gnn");
+	if (rc != 0) {
+        posix_spawn_file_actions_destroy(&fa);
+        return -1;
+    }
+
+	// ========= prepare arguments vector
+	std::vector<char*> argv;
+
+	// -- push back macros while transforming to char*
+	#define PB(strname) argv.push_back(strname);
+	#define PBC(strname,strval) char strname[] = strval; argv.push_back(strname);
+	#define PBCI(val,sz) char cstr_##val[sz]; sprintf(cstr_##val,"%d",val); PB(cstr_##val);
+
+	// -- push back the arguments
+    PBC(uv,"uv");
+	PBC(run,"run");
+	PBC(rcv_py_path,"rcv.py");
+	PBC(opt_f,"-f");
+	PB(fifo_path);
+	PBC(opt_p,"-p");
+	PBCI(pack_size,5);
+	PBC(opt_w,"-s");
+	PB(gnn_snapshot_path);
+	PBC(opt_o, "-O");
+	PB(gnn_csv_out_path);
+    PB(nullptr);
+
+
+	// ========= spawn the process
+	pid_t pid;
+    rc = posix_spawnp(
+        &pid,
+        "uv",
+        &fa,   // file actions
+        nullptr,   // spawn attrs
+        argv.data(),
+        environ
+    );
+
+	// ========= cleanup & error check
+	posix_spawn_file_actions_destroy(&fa);
+    if (rc != 0) {
+        // errno-style error check
+        return -1;
+    }
+
+    return pid;
+	#undef PB
+	#undef PBC
+	#undef PBCI
+}
+
+void *nnModelUpdater_callback(void* arg) {
+	// This function should periodically read from the database and update the neural network model
+
+	nnModelUpdaterOptions_t* opts = static_cast<nnModelUpdaterOptions_t*>(arg);
+	ldmmap::LDMMap* db_ptr = opts->db_ptr;
+
+	// create fifo pipe with mkfifo
+	int fifofd=-1;
+	std::string fifo_path = "/tmp/nn_mup_fifo" + std::to_string(getpid());
+	if (mkfifo(fifo_path.c_str(), 0660) < 0){
+		std::cerr << "[ERROR] Cannot create FIFO pipe for Neural Network Model Updater!" << std::endl;
+		terminatorFlag = true;
+		pthread_exit(nullptr);
+	}
+	else{
+		std::cout << "[INFO] FIFO pipe created at " << GREEN_ESCAPE << fifo_path << RESET_ESCAPE << " for Neural Network Model Updater." << std::endl;
+		// open fifo for writing
+		fifofd = open(fifo_path.c_str(), O_RDWR | O_NONBLOCK);
+		if (fifofd < 0) {
+			std::cerr << "[ERROR] Cannot open FIFO pipe for Neural Network Model Updater!" << std::endl;
+			// created but can't open, so unlink it
+			unlink(fifo_path.c_str());
+			terminatorFlag = true;
+			pthread_exit(nullptr);
+		}
+	}
+
+	// spawn the gnn model and attach it to the pipe
+	std::string gnn_relative_snapshot_path = std::string("../") + opts->gnn_snapshot_path;
+	std::string gnn_relative_csv_out_path = std::string("../") + opts->gnn_csv_out_path;
+	pid_t pygnn_pid = uv_spawn_gnn(const_cast<char*>(fifo_path.c_str()), opts->pack_size, const_cast<char*>(gnn_relative_snapshot_path.c_str()), const_cast<char*>(gnn_relative_csv_out_path.c_str()));
+	if (pygnn_pid < 0) {
+		std::cerr << "[ERROR] Cannot spawn the GNN model process for Neural Network Model Updater!" << std::endl;
+		close(fifofd);
+		unlink(fifo_path.c_str());
+		terminatorFlag = true;
+		pthread_exit(nullptr);
+	}
+	else {
+		std::cout << "[INFO] Spawned GNN model process with PID " << GREEN_ESCAPE << pygnn_pid << RESET_ESCAPE << " for Neural Network Model Updater." << std::endl;
+	}
+
+	// create frame object
+	auto central_lat_lon = db_ptr->getCentralLatLon();
+	FrameBuffer frameBuf(fifofd, opts->max_frame_size, central_lat_lon.first, central_lat_lon.second, opts->sumo_netoffset_x, opts->sumo_netoffset_y, 1);
+
+	// Create a new timer
+	Timer tmr(opts->period_ms);
+	std::cout << "[INFO] Neural Network Model Updater started. Updating every " << opts->period_ms << " milliseconds." << std::endl;
+	if(tmr.start()==false) {
+		std::cerr << "[ERROR] Fatal error! Cannot create timer for the Neural Network Model Updater thread!" << std::endl;
+		unlink(fifo_path.c_str());
+		terminatorFlag = true;
+		pthread_exit(nullptr);
+	}
+
+	POLL_DEFINE_JUNK_VARIABLE();
+
+	while (terminatorFlag == false && tmr.waitForExpiration()==true) {
+		// Implement the logic to read from the database and update the neural network model
+		// ---- These operations will be performed periodically ----
+		// Placeholder: print a message indicating the update operation
+
+		// get time for window reference
+		addVdToFrameArgs_t addVdArgs = {
+			.fbPtr = &frameBuf,
+			.reftime_ms = get_timestamp_ms_gn(),
+			.window_size_ms = opts->period_ms
+		};
+		db_ptr->executeOnAllVehicleContents(&addVdToFrame, static_cast<void *>(&addVdArgs));
+		frameBuf.flushToFd(FrameBuffer::serialization_t::json);
+		// --------
+	}
+
+	if (!frameBuf.empty()) {
+		frameBuf.flushToFd(FrameBuffer::serialization_t::json);
+	}
+
+	if (terminatorFlag == true) {
+		std::cerr << "[WARN] Neural Network Model Updater terminated due to error." << std::endl;
+	}
+	close(fifofd);
+	unlink(fifo_path.c_str());
+	pthread_exit(nullptr);
+}
+
 int main(int argc, char **argv) {
+	curl_global_init(CURL_GLOBAL_DEFAULT);
 	terminatorFlag = false;
 
 	// DB cleaner thread ID
@@ -226,6 +472,9 @@ int main(int argc, char **argv) {
 	pthread_t vehviz_tid;
 	// Thread attributes (unused, for the time being)
 	// pthread_attr_t tattr;
+
+	pthread_t nn_updater_tid;
+	// thread periodically reading from db and updating nn model
 
 	// First of all, parse the options
 	options_t sldm_opts;
@@ -324,7 +573,9 @@ int main(int argc, char **argv) {
 	etsiDecoder::decoderFrontend decodeFrontend;
 	etsiDecoder::etsiDecodedData_t decodedData;
 
-	if(decodeFrontend.decodeEtsi((uint8_t *)&denm2_bytes[0], 190, decodedData)!=ETSI_DECODER_OK) {
+	Security::Security_error_t sec_retval;
+	storedCertificate_t certificateData;
+	if(decodeFrontend.decodeEtsi((uint8_t *)&denm2_bytes[0], 190, decodedData, sec_retval,certificateData)!=ETSI_DECODER_OK) {
 		std::cerr << "Error! Cannot decode ETSI packet!" << std::endl;
 	}
 
@@ -357,38 +608,38 @@ int main(int argc, char **argv) {
 	ldmmap::LDMMap dbtest;
 	ldmmap::vehicleData_t veh1 = {.stationID=188321312, .lat=45.562149, .lon=8.055311, .elevation=440, .heading=120, .speed_ms=17, .gnTimestamp=34235235235, .timestamp_us=0};
 	veh1.timestamp_us = get_timestamp_us(); // now
-	dbtest.insert(veh1);
+	dbtest.insertVehicle(veh1);
 	std::printf("Test vehicle 1 inserted @ %lu\n",veh1.timestamp_us);
 
 	ldmmap::vehicleData_t veh2 = {.stationID=288321312, .lat=45.512149, .lon=8.355311, .elevation=440, .heading=100, .speed_ms=17, .gnTimestamp=34235235235, .timestamp_us=0};
 	veh2.timestamp_us = get_timestamp_us()-2*1e6; // 2 seconds ago
-	dbtest.insert(veh2);
+	dbtest.insertVehicle(veh2);
 	std::printf("Test vehicle 2 inserted @ %lu\n",veh2.timestamp_us);
 
 	ldmmap::vehicleData_t veh3 = {.stationID=388321312, .lat=45.592149, .lon=8.855311, .elevation=440, .heading=80, .speed_ms=17, .gnTimestamp=34235235235, .timestamp_us=0};
 	veh3.timestamp_us = get_timestamp_us()-5*1e6; // 5 seconds ago
-	dbtest.insert(veh3);
+	dbtest.insertVehicle(veh3);
 	std::printf("Test vehicle 3 inserted @ %lu\n",veh3.timestamp_us);
 
 	ldmmap::vehicleData_t veh4 = {.stationID=488321312, .lat=45.362149, .lon=8.755311, .elevation=440, .heading=10, .speed_ms=17, .gnTimestamp=34235235235, .timestamp_us=0};
 	veh4.timestamp_us = get_timestamp_us()-7*1e6; // 7 seconds ago
-	dbtest.insert(veh4);
+	dbtest.insertVehicle(veh4);
 	std::printf("Test vehicle 4 inserted @ %lu\n",veh4.timestamp_us);
 
 	// Print all the contents of the test DB (should be equal to 4)
-	dbtest.printAllContents("Before deletion");
+	dbtest.printAllVehicleContents("Before deletion");
 
 	// Print the size of the test DB
-	std::cout << "Number of elements stored in the LDMMap DB: " << dbtest.getCardinality() << std::endl;
+	std::cout << "Number of elements stored in the LDMMap DB: " << dbtest.getVehicleCardinality() << std::endl;
 
 	// Delete now all the vehicles older than 5.5 seconds
-	dbtest.deleteOlderThan(5500); // Only 188321312, 288321312 and 388321312 should remain in the DB
+	dbtest.deleteVehicleOlderThan(5500); // Only 188321312, 288321312 and 388321312 should remain in the DB
 
 	// Now print all the contents of the DB again
-	dbtest.printAllContents("After deletion");
+	dbtest.printAllVehicleContents("After deletion");
 
 	// Print the size of the test DB again (should be equal to 3)
-	std::cout << "Number of elements stored in the LDMMap DB: " << dbtest.getCardinality() << std::endl;
+	std::cout << "Number of elements stored in the LDMMap DB: " << dbtest.getVehicleCardinality() << std::endl;
 
 	dbtest.setCentralLatLon(45.562149,8.055311); // Set a central lat lon for testing the visualizer thread
 
@@ -402,8 +653,31 @@ int main(int argc, char **argv) {
 	/* ------------------------------------------------------------------------------------------------------------------------------------ */
 	/* ------------------------------------------------------------------------------------------------------------------------------------ */
 
+	// Get the log file name from the options, if available, to enable log mode inside the AMQP client and the S-LDM modules
+	std::string logfile_name="";
+	if(options_string_len(sldm_opts.logfile_name)>0) {
+		logfile_name=std::string(options_string_pop(sldm_opts.logfile_name));
+		if(logfile_name!="stdout") {
+			time_t rawtime;
+			struct tm * timeinfo;
+  			char buffer [25] = {NULL};
+  			time (&rawtime);
+  			timeinfo = localtime (&rawtime);
+  			strftime (buffer,25,"-%Y%m%d-%H:%M:%S",timeinfo);
+			logfile_name += buffer;
+		}
+
+	}
+
 	// Create a new DB object
 	ldmmap::LDMMap *db_ptr = new ldmmap::LDMMap();
+
+	// Create a CertificateStore object (the same object will be then accessed by all the AMQP clients, when using more than one client)
+	CertificateStore *certStore_ptr = new CertificateStore();
+
+	// Create a MisbehaviourDetector object (the same object will be then accessed by all the AMQP clients, when using more than one client)
+	// Options passed just for future uses, may get removed
+	MisbehaviourDetector *mbd_ptr=new MisbehaviourDetector(sldm_opts.min_lat,sldm_opts.min_lon,sldm_opts.max_lat,sldm_opts.max_lon,certStore_ptr,db_ptr,logfile_name);
 
 	// Set a central latitude and longitude depending on the coverage area of the S-LDM (to be used only for visualization purposes -
 	// - it does not affect in any way the performance or the operations of the LDMMap DB module)
@@ -413,7 +687,11 @@ int main(int argc, char **argv) {
 	// (e.g. every 5 s) the database through the pointer "db_ptr" and "cleaning" the entries which are too old
 	// pthread_attr_init(&tattr);
 	// pthread_attr_setdetachstate(&tattr,PTHREAD_CREATE_DETACHED);
-	pthread_create(&dbcleaner_tid,NULL,DBcleaner_callback,(void *) db_ptr);
+	cleanerArgs args;
+	args.db_ptr=db_ptr;
+	args.certStore_ptr=certStore_ptr;
+	args.mbd_ptr=mbd_ptr;
+	pthread_create(&dbcleaner_tid,NULL,DBcleaner_callback,(void *) &args);
 	// pthread_attr_destroy(&tattr);
 
 	// We should also start here a second parallel thread, reading periodically the database (e.g. every 500 ms) and sending the vehicle data to
@@ -424,20 +702,18 @@ int main(int argc, char **argv) {
 	pthread_create(&vehviz_tid,NULL,VehVizUpdater_callback,(void *) &vizParams);
 	// pthread_attr_destroy(&tattr);
 
-	// Get the log file name from the options, if available, to enable log mode inside the AMQP client and the S-LDM modules
-	std::string logfile_name="";
-	if(options_string_len(sldm_opts.logfile_name)>0) {
-		logfile_name=std::string(options_string_pop(sldm_opts.logfile_name));
-		if(logfile_name!="stdout") {
-			time_t rawtime;
-			struct tm * timeinfo;
-  			char buffer [25] = {NULL};
-  			time (&rawtime);	
-  			timeinfo = localtime (&rawtime);
-  			strftime (buffer,25,"-%Y%m%d-%H:%M:%S",timeinfo);
-			logfile_name += buffer;
-		}
+	// third thread to read periodically from db and update python nn model
+	if (sldm_opts.gnn_trigger_enabled==true){
+		char *gnn_snapshot_path=nullptr;
+		if(options_string_len(sldm_opts.gnn_snapshot_path)>0)
+			gnn_snapshot_path=options_string_pop(sldm_opts.gnn_snapshot_path);
 
+		char *gnn_csv_out_path=nullptr;
+		if(options_string_len(sldm_opts.gnn_csv_out_path)>0)
+			gnn_csv_out_path=options_string_pop(sldm_opts.gnn_csv_out_path);
+		
+		nnModelUpdaterOptions_t nnMUP = {db_ptr, sldm_opts.gnn_step_len_ms, MAX_VEHICLES_PER_FRAME, sldm_opts.gnn_pack_size, gnn_snapshot_path, sldm_opts.gnn_sumo_netoffset_x, sldm_opts.gnn_sumo_netoffset_y, gnn_csv_out_path}; // every 100 ms, max frame size 2000 vehicles, 100 frames
+		pthread_create(&nn_updater_tid,NULL,nnModelUpdater_callback,(void *) &nnMUP);
 	}
 
 	// Create an indicatorTriggerManager object (the same object will be then accessed by all the AMQP clients, when using more than one client)
@@ -485,6 +761,7 @@ int main(int argc, char **argv) {
 			fclose(logfile_file);
 		}
 	}
+
 	// -*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*
 
 	// Create the main AMQP client object
@@ -510,7 +787,7 @@ int main(int argc, char **argv) {
 
 		for(unsigned int i=0;i<sldm_opts.num_amqp_x_enabled;i++) {
 			amqp_x_threads.emplace_back(AMQPclient_t,db_ptr,&sldm_opts,(logfile_name == "stdout" ? "stdout" : logfile_name + std::to_string(i+2)),
-				std::to_string(i+2),i,&itm,filter_str,&mainRecvClient);
+				std::to_string(i+2),i,&itm,filter_str,&mainRecvClient,mbd_ptr,certStore_ptr);
 		}
 	}
 
@@ -530,6 +807,9 @@ int main(int argc, char **argv) {
 			if(sldm_opts.indicatorTrgMan_enabled==true) {
 				mainRecvClient.setIndicatorTriggerManager(&itm);
 			}
+
+			// Activate Misbehaviour Detector is enabled
+			mainRecvClient.setMisbehaviourDetector(mbd_ptr);
 
 			// Set username, if specified
 			if(options_string_len(sldm_opts.amqp_broker_one.amqp_username)>0) {
@@ -569,6 +849,9 @@ int main(int argc, char **argv) {
 
 	pthread_join(dbcleaner_tid,nullptr);
 	pthread_join(vehviz_tid,nullptr);
+	if (sldm_opts.gnn_trigger_enabled==true) {
+		pthread_join(nn_updater_tid,nullptr);
+	}
 
 	if(sldm_opts.num_amqp_x_enabled>0) {
 		fprintf(stdout,"[INFO] Terminating the other AMQP clients...\n");

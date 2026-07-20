@@ -7,6 +7,7 @@
 
 
 #include <cstdint>
+#include "packetBuffer.h"
 
 namespace etsiDecoder {
 	typedef enum {
@@ -105,6 +106,30 @@ namespace etsiDecoder {
 	    uint32_t lenght; // Payload size
 	    unsigned char* data; // Payload
 	} GNDataIndication_t;
+
+	typedef struct _gndataRequest {
+		BTPType_t upperProtocol;
+		TransportType_t GNType; // GN Packet transport type -- GeoUnicast, SHB, TSB, GeoBroadcast or GeoAnycast
+		GeoArea_t GnAddress; // GN destination adress -- destination address(GeoUnicast) or geo. area (GeoBroadcast or GeoAnycast)
+		CommProfile_t GNCommProfile; // GN Communication Profile -- determines de LL protocol entity
+
+		int16_t GNSecurityP; // GN Security Profile /OPCIONAL/
+		int32_t GNITS_AIDL;//Length of the value provided in the ITS-AID parameter /OPCIONAL/
+		int32_t GNITS_AID;// ITS-AID for the payload to be sent/OPCIONAL/
+		int32_t GNSecurityPermL;// Length of the security permissions parameter/OPCIONAL/
+		int32_t GNSecurityPerm;// SSP associated with the ITS-AID/OPCIONAL/
+		int32_t GNSecurityContInfo;// Information to be used to selecting properties of the security protocol/OPCIONAL/
+		int32_t GNSecurityTargetIDListL; //Length for the value in the security target id list parameter /OPCIONAL/
+		int32_t GNSecurityTargetIDList;// Unordered collection of target IDs used by the security entity for specifying multiple recipients /OPCIONAL/
+		double GNMaxLife; //GN Maximum Packet Lifetime in [s] /OPCIONAL/
+		int16_t GNRepInt; // GN Repetition Interval /OPCIONAL/
+		int16_t GNMaxRepTime; // GN maximum repetition time /OPCIONAL/
+		int16_t GNMaxHL; // GN Max Hop Limit /OPCIONAL/
+		uint8_t GNTraClass; // GN Traffic Class
+
+		uint32_t lenght; // Payload size
+		packetBuffer data; // Payload
+	} GNDataRequest_t;
 
 	inline uint16_t swap_16bit(uint16_t us)
 	{

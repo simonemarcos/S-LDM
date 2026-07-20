@@ -20,6 +20,8 @@ asn_TYPE_operation_t asn_OP_BOOLEAN = {
 	BOOLEAN_encode_der,
 	BOOLEAN_decode_xer,
 	BOOLEAN_encode_xer,
+	BOOLEAN_decode_jer,
+    BOOLEAN_encode_jer,
 #ifdef	ASN_DISABLE_OER_SUPPORT
 	0,
 	0,

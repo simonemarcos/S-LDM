@@ -110,7 +110,7 @@ web::json::value ManeuveringServiceRestClient::make_SLDM_json(int eventID) {
 	sldm_json["event"] = MAKE_STR("CLC");
 	sldm_json["reference_vehicle_ID"] = MAKE_NUM(m_refVehStationID);
 
-	if(m_db_ptr->rangeSelect(m_range_m,m_refVehStationID,returnedvehs)!=ldmmap::LDMMap::LDMMAP_OK) {
+	if(m_db_ptr->rangeSelectVehicle(m_range_m,m_refVehStationID,returnedvehs)!=ldmmap::LDMMap::LDMMAP_OK) {
 		sldm_json["error"] = MAKE_STR("ERROR");
 		return sldm_json;
 	} else {
@@ -119,7 +119,7 @@ web::json::value ManeuveringServiceRestClient::make_SLDM_json(int eventID) {
 
 	ldmmap::LDMMap::returnedVehicleData_t refveh;
 
-	if(m_db_ptr->lookup(m_refVehStationID,refveh)!=ldmmap::LDMMap::LDMMAP_OK) {
+	if(m_db_ptr->lookupVehicle(m_refVehStationID,refveh)!=ldmmap::LDMMap::LDMMAP_OK) {
 		sldm_json["error"] = MAKE_STR("ERROR_REFERENCE_LOOKUP");
 		return sldm_json;
 	} else {

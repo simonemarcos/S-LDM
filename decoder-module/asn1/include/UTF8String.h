@@ -27,6 +27,12 @@ asn_random_fill_f  UTF8String_random_fill;
 #define UTF8String_encode_der   OCTET_STRING_encode_der
 #define UTF8String_decode_xer   OCTET_STRING_decode_xer_utf8
 #define UTF8String_encode_xer   OCTET_STRING_encode_xer_utf8
+jer_type_decoder_f OCTET_STRING_decode_jer_hex;     /* Hexadecimal */
+#define UTF8String_decode_jer OCTET_STRING_decode_jer_utf8;    /* ASCII/UTF-8 */
+//jer_type_decoder_f OCTET_STRING_decode_jer_utf8;    /* ASCII/UTF-8 */
+jer_type_encoder_f OCTET_STRING_encode_jer;
+#define UTF8String_encode_jer OCTET_STRING_encode_jer_utf8;
+//jer_type_encoder_f OCTET_STRING_encode_jer_utf8;
 #define UTF8String_decode_uper  OCTET_STRING_decode_uper
 #define UTF8String_encode_uper  OCTET_STRING_encode_uper
 

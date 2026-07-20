@@ -4,30 +4,17 @@
 #include <unordered_map>
 #include <vector>
 #include <shared_mutex>
+#include "optionalDataItem.h"
 
 #define vehicleDataVector_t(name) std::vector<ldmmap::vehicleData_t> name;
 
 // Facility macro to convert from DEG to RAD
 #define DEG_2_RAD(val) ((val)*M_PI/180.0)
 
-namespace ldmmap {
-	// Class to store optional data
-	// If the data is not available, m_available is 'false' and no actual data is stored (getData() does not return any meaningful data)
-	// If the data is available (isAvailable() returns 'true'), then the actual data can be retrieved with getData()
-	template <class T> class OptionalDataItem
-	{
-		private:
-			bool m_available;
-			T m_dataitem;
+// Unavailable value for the heading
+#define LDM_HEADING_UNAVAILABLE 3601.0
 
-		public:
-			OptionalDataItem(T data): m_dataitem(data) {m_available=true;}
-			OptionalDataItem(bool availability) {m_available=availability;}
-			OptionalDataItem() {m_available=false;}
-			T getData() {return m_dataitem;}
-			bool isAvailable() {return m_available;}
-			T setData(T data) {m_dataitem=data; m_available=true;}
-	};
+namespace ldmmap {
 
 	typedef enum StationTypeLDM {
 		StationType_LDM_unknown = 0,
@@ -42,6 +29,9 @@ namespace ldmmap {
 		StationType_LDM_trailer = 9,
 		StationType_LDM_specialVehicles	= 10,
 		StationType_LDM_tram = 11,
+		StationType_LDM_lightVruVehicle = 12,
+		StationType_LDM_animal = 13,
+		StationType_LDM_agricultural = 14,
 		StationType_LDM_roadSideUnit = 15,
 		StationType_LDM_specificCategoryVehicle1 = 100,
 		StationType_LDM_specificCategoryVehicle2 = 101,
@@ -58,6 +48,15 @@ namespace ldmmap {
 
 		StationType_LDM_unspecified= 120
 	} e_StationTypeLDM;
+
+	typedef enum DataUnavailableValue {
+		speed=UINT64_MAX,
+		longitudinalAcceleration=INT16_MAX,
+		curvature=INT16_MAX,
+		driveDirection=UINT8_MAX,
+		yawRate=INT16_MAX,
+		heading=UINT64_MAX,
+	} e_DataUnavailableValue;
 
 	// This structure contains all the data stored in the database for each vehicle (except for the PHPoints)
 	typedef struct vehicleData {
@@ -79,6 +78,42 @@ namespace ldmmap {
 
 		// Low frequency container data
 		OptionalDataItem<uint8_t> exteriorLights; // Bit string with exterior lights status
+		OptionalDataItem<uint8_t> lightBarActivated;
+		
+		// CPM patch
+		uint64_t lastCPMincluded;
+		uint64_t perceivedBy;
+		long xDistance;
+		long yDistance;
+		long xSpeed;
+		long ySpeed;
+		long xAcc;
+		long yAcc;
+		//long longitudinalAcceleration;
+		long confidence;
+		long angle;
+		bool detected;
+
+		// VAM patch
+		uint8_t macaddr[6];
+		double rssi_dBm;
+		std::string ipaddr;
+		std::string publicipaddr;
+		uint8_t vruMovementControl;
+		uint8_t vruEnvironment;
+		uint8_t vruSizeClass;
+
+		//patch MBD
+		uint8_t driveDirection;
+		double longitudinalAcceleration;
+		double curvature;
+		double yawRate;
+
+		//patch security
+		std::string certDigest;
+
+		//map checks
+		int64_t wayId;
 	} vehicleData_t;
 }
 

@@ -6,6 +6,18 @@
 // Epoch time at 2004-01-01 (in ms)
 #define TIME_SHIFT_MILLI 1072915200000
 
+uint64_t get_timestamp_s(void) {
+	time_t seconds;
+	struct timespec now;
+
+	if(clock_gettime(CLOCK_REALTIME, &now) == -1) {
+		perror("Cannot get the current microseconds UTC timestamp");
+		return -1;
+	}
+
+	return now.tv_sec;
+}
+
 uint64_t get_timestamp_us(void) {
 	time_t seconds;
 	uint64_t microseconds;

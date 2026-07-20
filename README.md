@@ -60,12 +60,22 @@ sudo apt install nodejs
 ```
 
 
-After installing the pre-requisites, you can clone this repository:
+After installing the pre-requisites, you can clone this repository.
+Since the S-LDM relies on two `git` submodules (`gnn` and `dataset-generator`, see the *GNN Trigger Concept* section below), the clone **should be recursive** in order to initialize and fetch them:
 ```
-git clone https://github.com/francescoraves483/S-LDM
+git clone --recursive https://github.com/francescoraves483/S-LDM
 cd S-LDM
 ```
-And build the S-LDM:
+
+To initialize and set up the submodules (pinned commit checkout + dependencies), run [`source syncmodules.sh`](./syncmodules.sh). Note that since submodules are based on python venv managed with [`uv`](https://docs.astral.sh/uv/), the script also checks for the presence of the uv binary in the machine, and if not it suggest automatic installation to the user.
+
+> If you previously cloned withtout a recursive repo, this script will be also initialize the submodules automatically!
+
+```
+source syncmodules.sh
+```
+
+Then build the S-LDM:
 ```
 make
 ```
@@ -141,7 +151,122 @@ The repository contains the following folders:
 - `tester`, for a tester module, to be used in conjunction with [ms-van3t](https://github.com/marcomali/ms-van3t), with the aim of testing the S-LDM in the lab with emulated vehicles. This folder also includes a sample Python 3 REST server to mock any MEC service receiving data from the S-LDM REST client.
 - `vehicle-visualizer`, containing the C++ code for the communication between the main S-LDM process and the javascript server managing the vehicle visualizer (vehicle-visualizer is licensed under **GPLv2** and it is derived directly from [ms-van3t](https://github.com/marcomali/ms-van3t))
 
+# Synchronizing the submodules (`syncmodules.sh`)
 
+[`syncmodules.sh`](./syncmodules.sh) checks out the two submodules ([`gnn`](./gnn/), [`dataset-generator`](./dataset-generator/)) at the **commits pinned by the superproject** (it never follows the remote branch tip) and installs their dependencies. It also initializes them if missing (e.g. non-recursive clone).
+
+```
+source syncmodules.sh
+```
+
+As mentioned [above](#compiling-the-s-ldm), the submodules are based on python `venv` managed with [`uv`](https://docs.astral.sh/uv/): thus the latter is a requirement, and, if not already present, the script already prompts the user to deal with installation automatically.
+For more detail about the installation and configuration of single submodules, please refer to their READMEs.
+
+In case it is necessary to advance a submodule to the latest upstream commit (and record the new pin in the S-LDM repo):
+```
+git submodule update --remote gnn            # or dataset-generator
+git add gnn && git commit -m "Bump gnn submodule"
+source syncmodules.sh
+```
+
+# GNN Trigger Concept
+
+Regarding the trigger module, a primitive implementation of the AI-based core has been provided as a later contribution to the original work.
+This addition has been first realized in 2 parts, here included as `git submodules`:
+- [`sumo-dataset-generator`](https://github.com/aledima00/sumo-dataset-generator) has been included in submodule [**dataset-generator**](./dataset-generator/): due to the lack of purpose-specific dataset, it has been developed as a SUMO-based framework for synthetic dataset generation;
+- [`sldm-gnn`](https://github.com/aledima00/sldm-gnn) has been included in submodule [**gnn**](./gnn/): it is the core of the new AI model, based on a Graph Neural Network, and it contains both training facilities and inference-ready receiver;
+
+Then, the latter module is also used directly in the S-LDM project, with its inference module included and wrapped in the core S-LDM binary to perform automatic inference. Basically, the S-LDM periodically scans its internal databased to build structured data, sent to the inference module.
+Such communication is performed by a buffered structure called [**FrameBuffer**](./src/frameBuffer.cpp), that caches data in sequences, and conditionally emits them to a named pipe (mkifo) in form of JSON, allowing the inference module to receive them, make inference, and save the output on a csv file.
+
+To configure such behaviors, custom options have been thus defined and included in the S-LDM:
+
+| Option                      | Type          | Default   | Description                                                                 |
+| --------------------------- | ------------- | --------- | --------------------------------------------------------------------------- |
+| `--disable-gnn-trigger`     | bool flag     | false     | If this flag is provided, it disables the gnn inference module.             |
+| `--gnn-snapshot-path`       | str (path)    | - (req.)  | Training snapshot to be loaded by the AI model to make inference.           |
+| `--gnn-step-len`            | float         | 100.0     | Period for frame creation. It should be equal to step length used in `sumo-dataset-generator` to produce the dataset used to train the model. |
+| `--gnn-pack-size`           | uint          | 100       | How many frame is a pack long.                                              |
+| `--gnn-sumo-netoffset`      | float,float   | 0.0,0.0   | Two comma-separated float values (`<offset_x>,<offset_y>`) applied in the Transverse Mercator (TM) conversion from Lat/Lon to SUMO planar x/y coordinates used by the GNN model, as `network = projected + netOffset`. They must be identical to the `netOffset` attribute that `set_geo_projection.py` writes into the `<location>` element of the SUMO `.net.xml`. `0.0,0.0` means no offset is applied. |
+| `--gnn-csv-out-path`        | str (path)    | - (req.)  | Output path in which the inference module can save its output as csv file.  |
+
+## End-to-end Simulation
+While it is possible to use the 2 modules on their own, as documented by their READMEs, there is also teh possibility of performing an end-to-end test of the whole pipeline.
+
+After producing a given dataset with train/valid/test splits, the model can be trained with train/valid splits, and evaluated with test split. However, in this way the whole procedure remains virtual.
+Instead, to test it with the real path through the S-LDM, a custom solution has been developed. If one wants to go through it, these are the steps required:
+1. generate the test splits
+2. clone and configure the [VaN3Twin](https://github.com/DriveX-devs/VaN3Twin) software, a V2X simulator that in this case will be used to simulate the test scenario and produce `.pcap` traces corresponding to each vehicle in the simulation;
+3. customize the VaN3Twin framework with the content of the [van3twin-patch](./van3twin-patch/) directory, that contains:
+  - [tools](./van3twin-patch/tools/): a directory to be copied as is in the root directory
+  - [src](./van3twin-patch/src/): a directory whose files are thought to substitute the ones with the same names in VaN3Twin codebase;
+4. copy the same SUMO config files used to generate the test split into VaN3Twin, and customize the patch file [v2v-simple-cam-exchange-80211p.cc](./van3twin-patch/src/v2v-simple-cam-exchange-80211p.cc); the section delimited by the `CONFIGURATION` comment marker groups all the `#define`s that must be tuned, in particular:
+   - `SIM_SUMO_FOLDER`, `SIM_SUMO_CONFIG`, `SIM_SUMO_MOB_TRACE`: paths to the SUMO scenario copied in the previous step;
+   - `SIM_LENGTH_S`: simulation length in seconds;
+   - `SUMO_STEP_LEN_S`: SUMO step length in seconds, **must match** the value used in `sumo-dataset-generator` (and equal to `--gnn-step-len` / 1000);
+   - `SIM_NO_INTERFERER`: set to `true` to disable the interfering vehicle;
+   - `SUMO_SEED`: must match the seed used to generate the test split, in order to have the same simulations;
+5. apply projection parameters using the [set_geo_projection.py](./van3twin-patch/tools/set_geo_projection.py) tool, which requires the `pyproj` Python package (`pip install pyproj` or `sudo apt install python3-pyproj`). It must be invoked as:
+   ```
+   python3 set_geo_projection.py --net-file <path.net.xml> --central-lat <lat> --central-lon <lon>
+   ```
+   where `(central_lat, central_lon)` **must be equal to the midpoint of the `--area` rectangle** that will be passed to the S-LDM, i.e. `((min_lat+max_lat)/2, (min_lon+max_lon)/2)`. This is mandatory because the S-LDM internally centers its own Transverse Mercator conversion on the area midpoint (`src/main.cpp`, `setCentralLatLon()`). If the two centers do not match, the projection used by the GNN path will be inconsistent with the one written into the `.net.xml` and the GNN will receive out-of-scale coordinates.
+   Take note of the `netOffset` value printed by the script: it will be reused in step 8 as `--gnn-sumo-netoffset`. The script also writes `+k=1` in the `.net.xml`, which is the scale factor expected by the S-LDM GNN path (`FrameBuffer` is constructed with `k0=1`, see `src/main.cpp`);
+6. recompile and run the example; it will produce a `.pcap` file for each vehicle. The [pcapmerge.sh](./van3twin-patch/tools/pcapmerge.sh) script can be used to merge them efficiently, but the `tshark` CLI from wireshark is required as a dependency.
+7. finally, the resulting single pcap trace can be used with [`TRACEN-X`](https://github.com/DriveX-devs/TRACEN-X) to replay the trace when necessary, targeting the ActiveMQ broker attached to the S-LDM instance;
+8. run the S-LDM, passing the `--gnn-*` options and ensuring the alignment constraints described above hold. A complete example invocation, consistent with the patch and `set_geo_projection.py`, is:
+   ```
+   ./SLDM \
+     -A <min_lat>:<min_lon>-<max_lat>:<max_lon> \
+     --broker-url 127.0.0.1:5672 --broker-queue topic://5gcarmen.samples \
+     -L stdout --disable-quadkey-filter \
+     --gnn-snapshot-path <path/to/snapshot.pth> \
+     --gnn-step-len 100 \
+     --gnn-pack-size 80 \
+     --gnn-sumo-netoffset <offset_x>,<offset_y> \
+     --gnn-csv-out-path ./out.csv
+   ```
+   where `<min_lat>:<min_lon>-<max_lat>:<max_lon>` is the *same* rectangle whose midpoint was passed as `--central-lat`/`--central-lon` to `set_geo_projection.py`, and `<offset_x>,<offset_y>` is the `netOffset` printed by the same tool.
+
+   > **Note on --gnn-pack-size and the training --cut:** this value must equal the --cut used at training (gnn/main.py --cut), not the full pack size of the dataset (sumo-dataset-generatom --pack-size / gnn/build.py -f). During training, --cut truncates each pack to its first cut frames so the model learns to predict the triggering event from a shorter observation window, effectively forecasting a near-future event. At inference, the S-LDM FrameBuffer accumulates exactly --gnn-pack-size frames and sends them to gnn/rcv.py, which reshapes them to (-1, frames_num, tot_fnum) with frames_num = --pack-size (rcv.py applies no CutFrames). To avoid a train/inference distribution shift, --gnn-pack-size must match the --cut used at training (e.g. if the dataset was generated with --pack-size 100 and the model trained with --cut 80, then --gnn-pack-size 80). See the [gnn/README](./gnn/README.md) for details on --cut.
+
+# Misbehaviour Detector
+The Misbehaviour Detector module currently provides only a basic Misbehaviour Detection Service, the MDS consists of simple data-centric checks on CAMs, VAMs, CPMs, and DENMs.
+The only introduced option for this module is `--disable-misbehaviour-detector` which simply makes the S-LDM avoid calling the MBD related functions.
+
+The MBD is a module that gets called by one of the AMQP clients when a message is received, the full implementation will first use the MDS to run all the checks on the message, then the MDS will provide the processed informations to the Misbehaviour Reporting Service that will futher process combined data to decide what action needs to be made (e.g. report the vehicle as misbehaving or not).
+
+In its current implementation the MBD is a single instance shared across all AMQP clients, after the checks are done the MBD simply returns to the AMQP client and as there is no MRS any misbehaviour will make the client discard the message, in the future this will change.
+
+The checks are mainly based on ETSI's proposals and cover different misbehaviour classes (e.g. plausibility, topology, etc.), while most of them don't require additional data outside of the received messages, topology checks and some DENM checks required the introduction of a small map module, based on OpenStreetMap, that downloads road and building informations needed for checks such as "Position not on road".
+
+For security layer validation another small module has been added to store old certificates and digests received from stations to prove their identities.
+
+For plausibility checks a fixed threshold is currently used, since this threshold may need to be tuned depending on the needs, a configuration file for the Misbehaviour Detector `MBDConfig.ini` is provided. The configuration presents a way to change those thresholds for all stationTypes or only for specific ones, in addition with some general customization options:
+- `UseHaversine`
+- `Tolerance`
+- `MaxTimeForConsecutive`
+- `IgnoreSecurity`
+- `MaxSectorSize`
+- `ToleranceMultiplierCPM`
+- `weatherAPIKey`
+- `DiscardOnMisbehaviour`
+
+A brief description of their use and effect is provided in the config file.
+
+The MDS provides 3 log files:
+- `misbehaviours_summary.txt` giving an overview of the failed checks made of the number of failures and a short description of the check.
+- `misbehaviours_log.csv` the verbose log of each failed check with the following fields numbered from 1 to 5:
+| Field                      | Description                                                                 |
+| --------------------------- | --------------------------------------------------------------------------- |
+| 1 | Message number, corresponding to the one in the evidence files, to allow checking the original message |
+| 2 | Message type, to identify if the message was a CAM/VAM/CPM/DENM |
+| 3 | Misbehaviour code, the internal code used for each misbehaviour |
+| 4 | Timestamp, the geonet timestamp of the message |
+| 5 | StationID, the stationID of the sender |
+| 6 | Additional fields, additional values like deltaTime, speed, etc. that vary from check to check and are useful for statistics |
+
+- `evidence.pcap` the received messages as evidence for the failed check, note that the messages received by the AMQP clients don't have the lower network layers, thus the ethernet header is forged.
 
 # Acknowledgments
 

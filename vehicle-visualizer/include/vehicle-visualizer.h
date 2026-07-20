@@ -51,9 +51,11 @@ class vehicleVisualizer
 		int sendObjectUpdate(std::string objID, double lat, double lon, int stationType);
 		int sendObjectUpdate(std::string objID, double lat, double lon, int stationType, double heading);
 
+		int sendEventObjectUpdate(uint64_t objID, double lat, double lon,double ele, int TypeEvent);
 		// This function will remove an object from the map, given its unique "objID"
 		int sendObjectClean(std::string objID);
 
+		int sendEventObjectClean(uint64_t objID);
 		// This function should be called to terminate the execution of the Node.js server
 		// Normally, the user should not call it, as it is automatically called by the destructor of the vehicleVisualizer object
 		int terminateServer();

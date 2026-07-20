@@ -52,6 +52,13 @@
 #define LONGOPT_gn_timestamp_property "gn-timestamp-property"
 #define LONGOPT_enable_ext_lights_hijack "enable-ext-lights-hijack"
 #define LONGOPT_enable_interop_hijack "enable-interop-hijack"
+#define LONGOPT_disable_misbehaviour_detector "disable-misbehaviour-detector"
+#define LONGOPT_disable_gnn_trigger "disable-gnn-trigger"
+#define LONGOPT_gnn_snapshot_path "gnn-snapshot-path"
+#define LONGOPT_gnn_step_len "gnn-step-len"
+#define LONGOPT_gnn_pack_size "gnn-pack-size"
+#define LONGOPT_gnn_sumo_netoffset "gnn-sumo-netoffset"
+#define LONGOPT_gnn_csv_out_path "gnn-csv-out-path"
 // The corresponding "val"s are used internally and they should be set as sequential integers starting from 256 (the range 320-399 should not be used as it is reserved to the AMQP broker long options)
 #define LONGOPT_vehviz_update_interval_sec_val 256
 #define LONGOPT_indicator_trgman_disable_val 257
@@ -63,6 +70,13 @@
 #define LONGOPT_gn_timestamp_property_val 263
 #define LONGOPT_enable_ext_lights_hijack_val 264
 #define LONGOPT_enable_interop_hijack_val 265
+#define LONGOPT_disable_misbehaviour_detector_val 266
+#define LONGOPT_disable_gnn_trigger_val 267
+#define LONGOPT_gnn_snapshot_path_val 268
+#define LONGOPT_gnn_step_len_val 269
+#define LONGOPT_gnn_pack_size_val 270
+#define LONGOPT_gnn_sumo_netoffset_val 271
+#define LONGOPT_gnn_csv_out_path_val 272
 
 // AMQP broker (additional)
 #define LONGOPT_amqp_enable_additionals "amqp-enable-additionals"
@@ -128,6 +142,13 @@ static const struct option long_opts[]={
 	{LONGOPT_gn_timestamp_property,					required_argument,	NULL, LONGOPT_gn_timestamp_property_val},
 	{LONGOPT_enable_ext_lights_hijack,			no_argument,		NULL, LONGOPT_enable_ext_lights_hijack_val},
 	{LONGOPT_enable_interop_hijack,			no_argument,		NULL, LONGOPT_enable_interop_hijack_val},
+	{LONGOPT_disable_misbehaviour_detector,			no_argument,		NULL, LONGOPT_disable_misbehaviour_detector_val},
+	{LONGOPT_disable_gnn_trigger,			no_argument,		NULL, LONGOPT_disable_gnn_trigger_val},
+	{LONGOPT_gnn_snapshot_path,				required_argument,	NULL, LONGOPT_gnn_snapshot_path_val},
+	{LONGOPT_gnn_step_len,				required_argument,	NULL, LONGOPT_gnn_step_len_val},
+	{LONGOPT_gnn_pack_size,				required_argument,	NULL, LONGOPT_gnn_pack_size_val},
+	{LONGOPT_gnn_sumo_netoffset,				required_argument,	NULL, LONGOPT_gnn_sumo_netoffset_val},
+	{LONGOPT_gnn_csv_out_path,				required_argument,	NULL, LONGOPT_gnn_csv_out_path_val},
 
 	// Additional AMQP clients options
 	{LONGOPT_amqp_enable_additionals,					required_argument,		NULL, LONGOPT_amqp_enable_additionals_val},
@@ -343,6 +364,34 @@ static const struct option long_opts[]={
 	"\t  to true, the data about specific vehicles is sent via REST with stationType=100 for easy filtering. Furthermore, if set\n" \
 	"\t  to true, these specific vehicles won't trigger data transmission via REST when a turn indicator is on.\n"
 
+#define OPT_disable_misbehaviour_detector \
+	"  --"LONGOPT_disable_misbehaviour_detector": when this options is specified, misbehaviour detection is disabled\n" \
+	"\t  any received message will be stored without running checks on it, messages can still be discarded by other checks,\n" \
+	"\t  eg. position filtering that is always enabled or ageCheck that is managed by its own option.\n" \
+
+#define OPT_disable_gnn_trigger \
+	"  --"LONGOPT_disable_gnn_trigger": when this options is specified, the gnn-based trigger is disabled\n" \
+	"\t  the python inference module will not be initialized and no data will be sent to it.\n"
+
+#define OPT_gnn_snapshot_path \
+	"  --"LONGOPT_gnn_snapshot_path": <path relative to cwd>: path of the gnn snapshot file (.pth) used to configure the model and load state dicts.\n"
+
+#define OPT_gnn_step_len \
+	"  --"LONGOPT_gnn_step_len": <integer>: temporal distance, in ms, between consecutive frames used in the gnn model.\n"\
+	"\t  In the SLDM, this basically changes the period of capture of frames, and consequent forward to the gnn model.\n"\
+	"\t  It must be greater or equal than 1ms; default is "STRINGIFY(DEFAULT_GNN_STEP_LEN_MS)"ms (i.e. frames are captured and sent to the gnn model every "STRINGIFY(DEFAULT_GNN_STEP_LEN_MS)"ms).\n"
+
+#define OPT_gnn_pack_size \
+	"  --"LONGOPT_gnn_pack_size": <integer>: number of frames to pack together for each inference of the GNN model.\n"\
+	"\t  It must be greater or equal than 1 frame; default is "STRINGIFY(DEFAULT_GNN_PACK_SIZE)" (i.e. each sequence inferred is "STRINGIFY(DEFAULT_GNN_PACK_SIZE)" frames long).\n"
+
+#define OPT_gnn_sumo_netoffset \
+	"  --"LONGOPT_gnn_sumo_netoffset": <string of comma-separated float values>: this offset is used in the conversion from Lat/Lon to SUMO x/y coordinates for the gnn model. The string should contain two comma-separated float values, where the first one is the offset to be applied to the x coordinate and the second one is the offset to be applied to the y coordinate. Default: \"0.0,0.0\" (i.e., no offset is applied).\n"
+
+#define OPT_gnn_csv_out_path \
+	"  --"LONGOPT_gnn_csv_out_path": <path relative to cwd>: path of the output CSV file where inference results of the gnn model will be saved.\n"\
+	"\t  If not specified, it defaults to "STRINGIFY(DEFAULT_GNN_CSV_OUT_PATH)"\n"
+
 static void print_long_info(char *argv0) {
 	fprintf(stdout,"\nUsage: %s [-A S-LDM coverage internal area] [options]\n"
 		"%s [-h | --"LONGOPT_h"]: print help and show options\n"
@@ -381,6 +430,13 @@ static void print_long_info(char *argv0) {
 		OPT_amqp_main_idle_timeout
 		OPT_amqp_main_reconn_local_timeout_exp
 		OPT_brokers_enable_description
+		OPT_disable_misbehaviour_detector
+		OPT_disable_gnn_trigger
+		OPT_gnn_snapshot_path
+		OPT_gnn_step_len
+		OPT_gnn_pack_size
+		OPT_gnn_sumo_netoffset
+		OPT_gnn_csv_out_path
 		,
 		argv0,argv0,argv0);
 
@@ -470,12 +526,21 @@ void options_initialize(struct options *options) {
 	options->vehviz_update_interval_sec=DEFAULT_VEHVIZ_UPDATE_INTERVAL_SECONDS;
 
 	options->indicatorTrgMan_enabled=true;
+	options->MBDetector_enabled=true;
 
 	options->ageCheck_enabled=true;
 	options->quadkFilter_enabled=true;
 
 	options->od_json_interface_enabled=false;
 	options->od_json_interface_port=DEFAULT_OD_JSON_OVER_TCP_INTERFACE_PORT;
+
+	options->gnn_trigger_enabled=true;
+	options->gnn_snapshot_path=options_string_declare();
+	options->gnn_step_len_ms=DEFAULT_GNN_STEP_LEN_MS;
+	options->gnn_pack_size=DEFAULT_GNN_PACK_SIZE;
+	options->gnn_sumo_netoffset_x=0.0;
+	options->gnn_sumo_netoffset_y=0.0;
+	options->gnn_csv_out_path=options_string_declare();
 }
 
 unsigned int parse_options(int argc, char **argv, struct options *options) {
@@ -754,6 +819,66 @@ unsigned int parse_options(int argc, char **argv, struct options *options) {
 				options->interop_hijack_enable=true;
 				break;
 
+			case LONGOPT_disable_misbehaviour_detector_val:
+				options->MBDetector_enabled=false;
+				break;
+
+			case LONGOPT_disable_gnn_trigger_val:
+				options->gnn_trigger_enabled=false;
+				break;
+
+			case LONGOPT_gnn_snapshot_path_val:
+				if(!options_string_push(&(options->gnn_snapshot_path),optarg)) {
+					fprintf(stderr,"Error in parsing the gnn snapshot path: %s.\n",optarg);
+					print_short_info_err(options,argv[0]);
+				}
+				break;
+
+			case LONGOPT_gnn_step_len_val:
+				errno=0; // Setting errno to 0 as suggested in the strtoul() man page
+				options->gnn_step_len_ms=strtoul(optarg,&sPtr,10);
+
+				if(sPtr==optarg) {
+					fprintf(stderr,"Cannot find any digit in the specified value (--" LONGOPT_gnn_step_len ").\n");
+					print_short_info_err(options,argv[0]);
+				} else if(errno || options->gnn_step_len_ms<1) {
+					fprintf(stderr,"Error in parsing the step length for the GNN model. Remember that it must be within [100,10000] milliseconds.\n");
+					print_short_info_err(options,argv[0]);
+				}
+				break;
+
+			case LONGOPT_gnn_pack_size_val:
+				errno=0; // Setting errno to 0 as suggested in the strtoul() man page
+				options->gnn_pack_size=strtoul(optarg,&sPtr,10);
+
+				if(sPtr==optarg) {
+					fprintf(stderr,"Cannot find any digit in the specified value (--" LONGOPT_gnn_pack_size ").\n");
+					print_short_info_err(options,argv[0]);
+				} else if(errno || options->gnn_pack_size<1) {
+					fprintf(stderr,"Error in parsing the pack size for the GNN model. Remember that it must be within [1,10000] frames.\n");
+					print_short_info_err(options,argv[0]);
+				}
+				break;
+
+			case LONGOPT_gnn_sumo_netoffset_val:
+				{
+					char trailing_char='\0';
+					int parsed_fields=sscanf(optarg," %lf , %lf %c",&options->gnn_sumo_netoffset_x,&options->gnn_sumo_netoffset_y,&trailing_char);
+					if(parsed_fields!=2) {
+					fprintf(stderr,"Error in parsing the SUMO net offset for the GNN model. Remember that it should be a string of two comma-separated float values, such as \"0.0,0.0\".\n");
+					print_short_info_err(options,argv[0]);
+					}
+				}
+				// printf("received netoffset: %f and %f\n",options->gnn_sumo_netoffset_x,options->gnn_sumo_netoffset_y);
+				break;
+
+			case LONGOPT_gnn_csv_out_path_val:
+				if(!options_string_push(&(options->gnn_csv_out_path),optarg)) {
+					fprintf(stderr,"Error in parsing the gnn CSV output path: %s.\n",optarg);
+					print_short_info_err(options,argv[0]);
+				}
+				break;
+
 			// Additional AMQP clients options
 			// ----------------------------------
 			case LONGOPT_amqp_enable_additionals_val:
@@ -977,6 +1102,13 @@ unsigned int parse_options(int argc, char **argv, struct options *options) {
 	if(options_string_len(options->gn_timestamp_property)<=0) {
 		if(!options_string_push(&(options->gn_timestamp_property),DEFAULT_GN_TIMESTAMP_PROPERTY)) {
 			fprintf(stderr,"Error! Cannot set the default gn timestamp property name.\nPlease report this bug to the developers.\n");
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	if(options_string_len(options->gnn_csv_out_path)<=0) {
+		if(!options_string_push(&(options->gnn_csv_out_path),DEFAULT_GNN_CSV_OUT_PATH)) {
+			fprintf(stderr,"Error! Cannot set the default GNN CSV output path.\nPlease report this bug to the developers.\n");
 			exit(EXIT_FAILURE);
 		}
 	}

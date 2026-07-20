@@ -32,6 +32,10 @@ xer_type_decoder_f OCTET_STRING_decode_xer_binary;	/* 01010111010 */
 xer_type_decoder_f OCTET_STRING_decode_xer_utf8;	/* ASCII/UTF-8 */
 xer_type_encoder_f OCTET_STRING_encode_xer;
 xer_type_encoder_f OCTET_STRING_encode_xer_utf8;
+jer_type_decoder_f OCTET_STRING_decode_jer_hex;     /* Hexadecimal */
+jer_type_decoder_f OCTET_STRING_decode_jer_utf8;    /* ASCII/UTF-8 */
+jer_type_encoder_f OCTET_STRING_encode_jer;
+jer_type_encoder_f OCTET_STRING_encode_jer_utf8;
 oer_type_decoder_f OCTET_STRING_decode_oer;
 oer_type_encoder_f OCTET_STRING_encode_oer;
 per_type_decoder_f OCTET_STRING_decode_uper;

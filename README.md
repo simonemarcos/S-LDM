@@ -35,7 +35,7 @@ The S-LDM can be easily compiled with `make`.
 
 Before compiling it, you need to install the following **pre-requisites**: `libcpprest-dev`, `libgeographic-dev`. Under Ubuntu, you can install them with:
 ```
-sudo apt install libcpprest-dev libgeographic-dev
+sudo apt install libcpprest-dev libgeographiclib-dev
 ```
 
 The S-LDM also needs the **Qpid Proton** AMQP 1.0 client library to be installed.

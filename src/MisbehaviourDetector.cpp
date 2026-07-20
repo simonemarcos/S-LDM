@@ -1,6 +1,5 @@
 #include "MisbehaviourDetector.h"
 
-#include <iostream>
 #include <cmath>
 #include "INIReader.h"
 #include "utils.h"
@@ -74,6 +73,7 @@ FILE *log_summary;
 FILE *log_csv;
 
 uint64_t MisbehaviourDetector::processCAM(proton::binary message_bin, ldmmap::vehicleData_t vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
+	std::lock_guard<std::mutex> mbd_lock(m_mbd_mutex);
 
 	uint64_t MB_CODE=0, unavailables=0;
 	ldmmap::LDMMap::LDMMap_error_t db_retval;
@@ -200,6 +200,7 @@ uint64_t MisbehaviourDetector::processCAM(proton::binary message_bin, ldmmap::ve
 }
 
 uint64_t MisbehaviourDetector::processVAM(proton::binary message_bin, ldmmap::vehicleData_t vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
+	std::lock_guard<std::mutex> mbd_lock(m_mbd_mutex);
 
 	uint64_t MB_CODE=0, unavailables=0;
 	ldmmap::LDMMap::LDMMap_error_t db_retval;
@@ -324,6 +325,7 @@ uint64_t MisbehaviourDetector::processVAM(proton::binary message_bin, ldmmap::ve
 }
 
 uint64_t MisbehaviourDetector::processCPM(proton::binary message_bin, std::vector<ldmmap::vehicleData_t> PO_vec, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
+	std::lock_guard<std::mutex> mbd_lock(m_mbd_mutex);
 
 	uint64_t MB_CODE=0, unavailables=0;
 	ldmmap::LDMMap::LDMMap_error_t db_retval;
@@ -1510,6 +1512,8 @@ size_t WriteCallbackMBD(void* ptr, size_t size, size_t nmemb, void* stream) {
 
 
 void MisbehaviourDetector::processDENM(proton::binary message_bin, ldmmap::eventData_t evedata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
+	std::lock_guard<std::mutex> mbd_lock(m_mbd_mutex);
+
 	bool pending;
 	pendingEvent_t currentEvent;
 
@@ -1922,6 +1926,8 @@ void MisbehaviourDetector::eventDecision(pendingEvent_t currentEvent) {
 }
 
 void MisbehaviourDetector::cleanupPendingEvents() {
+	std::lock_guard<std::mutex> mbd_lock(m_mbd_mutex);
+
 	uint64_t now = get_timestamp_ns();
     for (auto it=m_pendingEvents.cbegin();it!=m_pendingEvents.cend();) {
 		// first check if the event is too old to be relevant, then check the validation period

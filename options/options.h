@@ -110,7 +110,7 @@ static inline bool fill_AMQPClient_options_array_##name(char * optarg, int num_c
 }
 
 // Insert here the version string
-#define VERSION_STR "S-LDM 1.2.10-beta" // 1.0.0 -> first (initial) cross-border version
+#define VERSION_STR "S-LDM 2.0-beta" // 1.0 -> first (initial) cross-border version; 2.0 -> first version with Misheaviour Detection and AI-based trigger
 
 #define DEFAULT_BROKER_URL "127.0.0.1:5672"
 #define DEFAULT_BROKER_QUEUE "topic://5gcarmen.examples"

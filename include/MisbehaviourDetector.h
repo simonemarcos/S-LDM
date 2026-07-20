@@ -11,11 +11,11 @@
 #include <proton/message.hpp>
 
 // shift for bitmap operations
-#define MB_CODE_CONV(MB_CODE) 1<<MB_CODE
-#define MB_CODE_CLEAR(MB_CODE) ~MB_CODE_CONV(MB_CODE)
+#define MB_CODE_CONV(MB_CODE) (1ULL<<(MB_CODE))
+#define MB_CODE_CLEAR(MB_CODE) (~MB_CODE_CONV(MB_CODE))
 
 // returns true if misbehavour is detected false otherwise
-#define MB_CODE_CHECK(MB_CODE,FIELD_N) ((1<<FIELD_N) & MB_CODE)!=0
+#define MB_CODE_CHECK(MB_CODE,FIELD_N) (((1ULL<<(FIELD_N)) & (MB_CODE))!=0)
 
 extern "C" {
 	#include "CAM.h"
@@ -212,6 +212,11 @@ class MisbehaviourDetector {
 		std::set<uint64_t> m_already_reported; // List of vehicles for which a report has been sent already (potentially use to not trust them)
 		
 		private:
+		// Only one thread at a time may use the detector!
+		// Several threads call into it (one per AMQP client, in case of multiple clients, 
+		// plus the DB cleaner), and this lock ensures thread safety. It is also used to
+		// protect m_logfile_file.
+		std::mutex m_mbd_mutex;
 		std::string m_logfile_name;
 		FILE *m_logfile_file;
 

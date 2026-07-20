@@ -110,7 +110,7 @@ typedef	unsigned int	uint32_t;
 #endif /* __GNUC__ */
 #endif	/* MIN */
 
-#if __STDC_VERSION__ >= 199901L
+#if defined(__cplusplus) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L)
 #ifndef SIZE_MAX
 #define SIZE_MAX   ((~((size_t)0)) >> 1)
 #endif
@@ -130,7 +130,7 @@ typedef	unsigned int	uint32_t;
 #define RSSIZE_MAX   ((ssize_t)(RSIZE_MAX >> 1))
 #endif
 
-#if __STDC_VERSION__ >= 199901L
+#if defined(__cplusplus) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L)
 #define ASN_PRI_SIZE "zu"
 #define ASN_PRI_SSIZE "zd"
 #define ASN_PRIuMAX PRIuMAX

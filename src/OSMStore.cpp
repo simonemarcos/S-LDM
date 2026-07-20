@@ -47,13 +47,13 @@ public:
             for (osmium::NodeRef nr:way.nodes()) {
                 boost::geometry::append(newPolygon.outer(),point2d(nr.location().lat(),nr.location().lon()));
             }
-            buildings_polygons.emplace(way.id(),newPolygon);
+            buildings_polygons.try_emplace(way.id(),newPolygon);
         } else if (way.tags().get_value_by_key("highway","")!="") { // check if highway (could be avoided since we only query buildings and highways)
             way_linestring newLinestring;
             for (osmium::NodeRef nr:way.nodes()) {
                 newLinestring.emplace_back(point2d(nr.location().lat(),nr.location().lon()));
             }
-            highways_linestrings.emplace(way.id(),newLinestring);
+            highways_linestrings.try_emplace(way.id(),newLinestring);
     
             HighwayInfo_t info;
             std::string width_str=way.tags().get_value_by_key("width","");
@@ -132,10 +132,10 @@ public:
     static void node(const osmium::Node& node) {
         // check if its bus_stop or tram_stop
         if (node.tags().get_value_by_key("highway","")=="bus_stop") {
-            bus_stops.emplace(node.id(),point2d(node.location().lat(),node.location().lon()));
+            bus_stops.try_emplace(node.id(),point2d(node.location().lat(),node.location().lon()));
         }
         if (node.tags().get_value_by_key("railway","")=="tram_stop") {
-            tram_stops.emplace(node.id(),point2d(node.location().lat(),node.location().lon()));
+            tram_stops.try_emplace(node.id(),point2d(node.location().lat(),node.location().lon()));
         }
     }
 
@@ -311,8 +311,8 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon, i
                     new_buildings_polygons.emplace(b);
                 }
             }
-            m_highways_by_sector.emplace(std::tuple<int,int>(i,j),new_highways_linestrings);
-            m_buildings_by_sector.emplace(std::tuple<int,int>(i,j),new_buildings_polygons);
+            m_highways_by_sector.try_emplace(std::tuple<int,int>(i,j),new_highways_linestrings);
+            m_buildings_by_sector.try_emplace(std::tuple<int,int>(i,j),new_buildings_polygons);
             j++;
             lon+=m_lon_increment;
         }

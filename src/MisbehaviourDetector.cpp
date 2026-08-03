@@ -72,7 +72,7 @@ pcap_dumper_t *log_pcap;
 FILE *log_summary;
 FILE *log_csv;
 
-uint64_t MisbehaviourDetector::processCAM(proton::binary message_bin, ldmmap::vehicleData_t vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
+uint64_t MisbehaviourDetector::processCAM(proton::binary message_bin, ldmmap::vehicleData_t &vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
 	std::lock_guard<std::mutex> mbd_lock(m_mbd_mutex);
 
 	uint64_t MB_CODE=0, unavailables=0;
@@ -199,7 +199,7 @@ uint64_t MisbehaviourDetector::processCAM(proton::binary message_bin, ldmmap::ve
 	return MB_CODE;
 }
 
-uint64_t MisbehaviourDetector::processVAM(proton::binary message_bin, ldmmap::vehicleData_t vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
+uint64_t MisbehaviourDetector::processVAM(proton::binary message_bin, ldmmap::vehicleData_t &vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
 	std::lock_guard<std::mutex> mbd_lock(m_mbd_mutex);
 
 	uint64_t MB_CODE=0, unavailables=0;
@@ -324,7 +324,7 @@ uint64_t MisbehaviourDetector::processVAM(proton::binary message_bin, ldmmap::ve
 	return MB_CODE;
 }
 
-uint64_t MisbehaviourDetector::processCPM(proton::binary message_bin, std::vector<ldmmap::vehicleData_t> PO_vec, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
+uint64_t MisbehaviourDetector::processCPM(proton::binary message_bin, std::vector<ldmmap::vehicleData_t> &PO_vec, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
 	std::lock_guard<std::mutex> mbd_lock(m_mbd_mutex);
 
 	uint64_t MB_CODE=0, unavailables=0;
@@ -573,7 +573,7 @@ void MisbehaviourDetector::Init(double minlat, double minlon, double maxlat, dou
 	log_pcap=pcap_dump_open(pcap_open_dead(DLT_EN10MB,1<<16),"./evidence.pcap");
 }
 
-uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables, int msgType) {
+uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t &vehdata, uint64_t &unavailables, int msgType) {
 	uint64_t MB_CODE=0;
 	ldmmap::vehicleData_t lastMessage;
 	bool lastMessagePresent=false;
@@ -675,6 +675,10 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 		if (messageDeltaTime<0.095) {
 			fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;lastTimestamp=%li\"\n",msgNumber,msgType,MB_BEACON_FREQ_INC,vehdata.camTimestamp,vehdata.stationID,messageDeltaTime,lastMessage.camTimestamp);
 			MB_CODE|=MB_CODE_CONV(MB_BEACON_FREQ_INC);
+			if (messageDeltaTime<=0) {
+				// identical timestamps: no time base for any rate calculation
+				lastMessagePresent=false;
+			}
 		}
 
 	}
@@ -730,7 +734,7 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 					}
 	
 					// Calculated average acceleration doesn't match with average acceleration of the CAMs
-					if (messageSpeedAcceleration>averageAcceleration*(1+m_opts.tolerance*tolMult) || messageSpeedAcceleration<averageSpeed*(1-m_opts.tolerance*tolMult)) {
+					if (messageSpeedAcceleration>averageAcceleration*(1+m_opts.tolerance*tolMult) || messageSpeedAcceleration<averageAcceleration*(1-m_opts.tolerance*tolMult)) {
 						if (fabs(messageSpeedAcceleration-averageAcceleration)>5) {
 							fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedAcceleration=%f;averageAcceleration=%f\"\n",
 								msgNumber,msgType,MB_SPEED_ACCELERATION_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageSpeedAcceleration,averageAcceleration);
@@ -871,7 +875,7 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 
 		if (curvatureRatio!=ldmmap::e_DataUnavailableValue::curvature && speedRatio!=ldmmap::e_DataUnavailableValue::speed && yawRateRatio!=ldmmap::e_DataUnavailableValue::yawRate) {
 			const double dCurvature=vehdata.curvature-lastMessage.curvature;
-			if (fabs(curvatureRatio)<0.05 || fabs(dCurvature<0.01)) {
+			if (fabs(curvatureRatio-1)<0.05 || fabs(dCurvature)<0.01) {
 				
 				// ------- HEADING CHANGE SPEED CHECK -------
 
@@ -886,7 +890,7 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 				}
 				// const double expectedSpeed=vehdata.yawRate*lastMessage.speed_ms/lastMessage.yawRate;
 				// const double error=fabs(expectedSpeed-vehdata.speed_ms);
-				// const double errorRatio=vehdata.speed_ms/expectedSpeed;
+				// const double errorRatio=fabs(expectedSpeed)>1e-9 ? vehdata.speed_ms/expectedSpeed : 2;
 				// if (fabs(errorRatio-1)>0.05) {
 				// 	if (error>0.01) {
 				// 		fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"speed=%f;calculatedSpeed=%f\"\n",
@@ -899,7 +903,7 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 
 				const double expectedYawRate=vehdata.speed_ms*lastMessage.yawRate/lastMessage.speed_ms;
 				const double error=fabs(expectedYawRate-vehdata.yawRate);
-				const double errorRatio=vehdata.yawRate/expectedYawRate;
+				const double errorRatio=fabs(expectedYawRate)>1e-9 ? vehdata.yawRate/expectedYawRate : 2;
 				if (fabs(errorRatio-1)>0.05) {
 					if (error>2) {
 						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"yawRate=%f;calculatedYawRate=%f\"\n",
@@ -910,14 +914,14 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 			}
 
 			const double dSpeed=vehdata.speed_ms-lastMessage.speed_ms;
-			if (fabs(speedRatio)<0.05 || fabs(dSpeed)<1) {
+			if (fabs(speedRatio-1)<0.05 || fabs(dSpeed)<1) {
 				// pretty much the same checks
 
 				// ------- CURVATURE CHANGE YAW RATE CHECK -------
 
 				const double expectedCurvature=lastMessage.curvature*vehdata.yawRate/lastMessage.yawRate;
 				double error=fabs(expectedCurvature-vehdata.curvature);
-				double errorRatio=vehdata.curvature/expectedCurvature;
+				double errorRatio=fabs(expectedCurvature)>1e-9 ? vehdata.curvature/expectedCurvature : 2;
 				if (fabs(errorRatio-1)>0.05) {
 					if (error>0.01) {
 						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"curvature=%f;calculatedCurvature=%f\"\n",
@@ -930,7 +934,7 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 
 				const double expectedYawRate=vehdata.curvature*lastMessage.yawRate/lastMessage.curvature;
 				error=fabs(expectedYawRate-vehdata.yawRate);
-				errorRatio=vehdata.yawRate/expectedYawRate;
+				errorRatio=fabs(expectedYawRate)>1e-9 ? vehdata.yawRate/expectedYawRate : 2;
 				if (fabs(errorRatio-1)>0.05) {
 					if (error>2) {
 						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"yawRate=%f;calculatedYawRate=%f\"\n",
@@ -944,10 +948,10 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 			// ------- CURVATURE CHANGE SPEED CHECK -------
 
 			const double dYawRate=vehdata.yawRate-lastMessage.yawRate;
-			if (fabs(yawRateRatio-1)<0.05 || fabs(dYawRate)<1 && vehdata.speed_ms!=0) {
+			if ((fabs(yawRateRatio-1)<0.05 || fabs(dYawRate)<1) && vehdata.speed_ms!=0) {
 				const double expectedCurvature=lastMessage.curvature*lastMessage.speed_ms/vehdata.speed_ms;
 				const double error=fabs(expectedCurvature-vehdata.curvature);
-				const double errorRatio=vehdata.curvature/expectedCurvature;
+				const double errorRatio=fabs(expectedCurvature)>1e-9 ? vehdata.curvature/expectedCurvature : 2;
 				if (fabs(errorRatio-1)>0.05) {
 					if (error>0.01) {
 						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"curvature=%f;calculatedCurvature=%f\"\n",
@@ -960,8 +964,8 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 	}
 
 	// ------- CLASS 3 CHECKS -------
-	double distance=5;
-	osmium::object_id_type closestWay=m_osmStore->checkIfPointOnRoad(vehdata.lat,vehdata.lon,distance);
+	double distance=3;
+	osmium::object_id_type closestWay=m_osmStore->checkIfPointOnRoad(vehdata.lat,vehdata.lon,distance,lastMessagePresent?lastMessage.wayId:-1);
 	if (closestWay==-1) {
 		fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"latitude=%f;longitude=%f;distance=%f\"\n",msgNumber,msgType,MB_NOT_ON_ROAD,vehdata.gnTimestamp,vehdata.stationID,vehdata.lat,vehdata.lon,distance);
 		MB_CODE|=MB_CODE_CONV(MB_NOT_ON_ROAD);
@@ -972,11 +976,12 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 			MB_CODE|=MB_CODE_CONV(MB_INSIDE_BUILDING);
 		}
 	} else {
+		vehdata.wayId=closestWay;
 		// on road: can check the rest
 
 		if (vehdata.heading!=ldmmap::e_DataUnavailableValue::heading) {
 			double roadHeading;
-			if (m_osmStore->checkHeadingMatchesRoad(vehdata.heading,vehdata.lat,vehdata.lon,closestWay,roadHeading)) {
+			if (m_osmStore->checkHeadingNotFollowingRoad(vehdata.heading,vehdata.lat,vehdata.lon,closestWay,roadHeading)) {
 				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"heading=%f;roadHeading=%f\"\n",msgNumber,msgType,MB_HEADING_NOT_FOLLOWING_ROAD,vehdata.gnTimestamp,vehdata.stationID,vehdata.heading,roadHeading);
 				MB_CODE|=MB_CODE_CONV(MB_HEADING_NOT_FOLLOWING_ROAD);
 			}
@@ -1113,7 +1118,7 @@ uint64_t MisbehaviourDetector::individualCAMchecks(ldmmap::vehicleData_t vehdata
 	return MB_CODE;
 }
 
-uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables, int msgType) {
+uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t &vehdata, uint64_t &unavailables, int msgType) {
 	uint64_t MB_CODE=0;
 	ldmmap::vehicleData_t lastMessage;
 	bool lastMessagePresent=false;
@@ -1259,7 +1264,7 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 			}
 			const double averageAcceleration=(vehdata.longitudinalAcceleration+lastMessage.longitudinalAcceleration)/2.0;
 			// Calculated average acceleration doesn't match with average acceleration of the CAMs
-			if (messageSpeedAcceleration>averageAcceleration*(1+m_opts.tolerance*tolMult) || messageSpeedAcceleration<averageSpeed*(1-m_opts.tolerance*tolMult)) {
+			if (messageSpeedAcceleration>averageAcceleration*(1+m_opts.tolerance*tolMult) || messageSpeedAcceleration<averageAcceleration*(1-m_opts.tolerance*tolMult)) {
 				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"deltaTime=%f;calculatedAcceleration=%f;averageAcceleration=%f\"\n",
 								msgNumber,msgType,MB_SPEED_ACCELERATION_INC,vehdata.gnTimestamp,vehdata.stationID,messageDeltaTime,messageSpeedAcceleration,averageAcceleration);
 				MB_CODE|=MB_CODE_CONV(MB_SPEED_ACCELERATION_INC);
@@ -1347,7 +1352,7 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 
 		if (curvatureRatio!=ldmmap::e_DataUnavailableValue::curvature && speedRatio!=ldmmap::e_DataUnavailableValue::speed && yawRateRatio!=ldmmap::e_DataUnavailableValue::yawRate) {
 			const double dCurvature=vehdata.curvature-lastMessage.curvature;
-			if (fabs(curvatureRatio)<0.05 || fabs(dCurvature<0.01)) {
+			if (fabs(curvatureRatio-1)<0.05 || fabs(dCurvature)<0.01) {
 				
 				// ------- HEADING CHANGE SPEED CHECK -------
 
@@ -1362,7 +1367,7 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 				}
 				// const double expectedSpeed=vehdata.yawRate*lastMessage.speed_ms/lastMessage.yawRate;
 				// const double error=fabs(expectedSpeed-vehdata.speed_ms);
-				// const double errorRatio=vehdata.speed_ms/expectedSpeed;
+				// const double errorRatio=fabs(expectedSpeed)>1e-9 ? vehdata.speed_ms/expectedSpeed : 2;
 				// if (fabs(errorRatio-1)>0.05) {
 				// 	if (error>0.01) {
 				// 		fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"speed=%f;calculatedSpeed=%f\"\n",
@@ -1375,7 +1380,7 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 
 				const double expectedYawRate=vehdata.speed_ms*lastMessage.yawRate/lastMessage.speed_ms;
 				const double error=fabs(expectedYawRate-vehdata.yawRate);
-				const double errorRatio=vehdata.yawRate/expectedYawRate;
+				const double errorRatio=fabs(expectedYawRate)>1e-9 ? vehdata.yawRate/expectedYawRate : 2;
 				if (fabs(errorRatio-1)>0.05) {
 					if (error>2) {
 						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"yawRate=%f;calculatedYawRate=%f\"\n",
@@ -1386,14 +1391,14 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 			}
 
 			const double dSpeed=vehdata.speed_ms-lastMessage.speed_ms;
-			if (fabs(speedRatio)<0.05 || fabs(dSpeed)<1) {
+			if (fabs(speedRatio-1)<0.05 || fabs(dSpeed)<1) {
 				// pretty much the same checks
 
 				// ------- CURVATURE CHANGE YAW RATE CHECK -------
 
 				const double expectedCurvature=lastMessage.curvature*vehdata.yawRate/lastMessage.yawRate;
 				double error=fabs(expectedCurvature-vehdata.curvature);
-				double errorRatio=vehdata.curvature/expectedCurvature;
+				double errorRatio=fabs(expectedCurvature)>1e-9 ? vehdata.curvature/expectedCurvature : 2;
 				if (fabs(errorRatio-1)>0.05) {
 					if (error>0.01) {
 						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"curvature=%f;calculatedCurvature=%f\"\n",
@@ -1406,7 +1411,7 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 
 				const double expectedYawRate=vehdata.curvature*lastMessage.yawRate/lastMessage.curvature;
 				error=fabs(expectedYawRate-vehdata.yawRate);
-				errorRatio=vehdata.yawRate/expectedYawRate;
+				errorRatio=fabs(expectedYawRate)>1e-9 ? vehdata.yawRate/expectedYawRate : 2;
 				if (fabs(errorRatio-1)>0.05) {
 					if (error>2) {
 						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"yawRate=%f;calculatedYawRate=%f\"\n",
@@ -1420,10 +1425,10 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 			// ------- CURVATURE CHANGE SPEED CHECK -------
 
 			const double dYawRate=vehdata.yawRate-lastMessage.yawRate;
-			if (fabs(yawRateRatio-1)<0.05 || fabs(dYawRate)<1) {
+			if ((fabs(yawRateRatio-1)<0.05 || fabs(dYawRate)<1) && vehdata.speed_ms!=0) {
 				const double expectedCurvature=lastMessage.curvature*lastMessage.speed_ms/vehdata.speed_ms;
 				const double error=fabs(expectedCurvature-vehdata.curvature);
-				const double errorRatio=vehdata.curvature/expectedCurvature;
+				const double errorRatio=fabs(expectedCurvature)>1e-9 ? vehdata.curvature/expectedCurvature : 2;
 				if (fabs(errorRatio-1)>0.05) {
 					if (error>0.01) {
 						fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"curvature=%f;calculatedCurvature=%f\"\n",
@@ -1446,7 +1451,7 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 	}
 
 	// ------- CLASS 3 CHECKS -------
-	double distance=5;
+	double distance=3;
 	osmium::object_id_type closestWay=m_osmStore->checkIfPointOnRoad(vehdata.lat,vehdata.lon,distance,lastMessagePresent?lastMessage.wayId:-1);
 	if (closestWay==-1) {
 		// not on road
@@ -1460,10 +1465,11 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 			MB_CODE|=MB_CODE_CONV(MB_ENVIRONMENT);
 		}
 	} else {
+		vehdata.wayId=closestWay;
 		// on road
 		if (vehdata.heading!=ldmmap::e_DataUnavailableValue::heading) {
 			double roadHeading;
-			if (m_osmStore->checkHeadingMatchesRoad(vehdata.heading,vehdata.lat,vehdata.lon,closestWay,roadHeading)) {
+			if (m_osmStore->checkHeadingNotFollowingRoad(vehdata.heading,vehdata.lat,vehdata.lon,closestWay,roadHeading)) {
 				fprintf(log_csv,"%d,%d,%d,%lu,%lu,\"heading=%f;roadHeading=%f\"\n",msgNumber,msgType,MB_HEADING_NOT_FOLLOWING_ROAD,vehdata.gnTimestamp,vehdata.stationID,vehdata.heading,roadHeading);
 				MB_CODE|=MB_CODE_CONV(MB_HEADING_NOT_FOLLOWING_ROAD);
 			}
@@ -1485,7 +1491,7 @@ uint64_t MisbehaviourDetector::individualVAMchecks(ldmmap::vehicleData_t vehdata
 	return MB_CODE;	
 }
 
-uint64_t MisbehaviourDetector::individualCPMchecks(std::vector<ldmmap::vehicleData_t> PO_vec, uint64_t &unavailables) {
+uint64_t MisbehaviourDetector::individualCPMchecks(std::vector<ldmmap::vehicleData_t> &PO_vec, uint64_t &unavailables) {
 	uint64_t MB_CODE=0;
 	for (auto vehdata:PO_vec) {
 		if (vehdata.stationType==ldmmap::e_StationTypeLDM::StationType_LDM_cyclist
@@ -1511,7 +1517,7 @@ size_t WriteCallbackMBD(void* ptr, size_t size, size_t nmemb, void* stream) {
 }
 
 
-void MisbehaviourDetector::processDENM(proton::binary message_bin, ldmmap::eventData_t evedata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
+void MisbehaviourDetector::processDENM(proton::binary message_bin, ldmmap::eventData_t &evedata, Security::Security_error_t sec_retval, storedCertificate_t certificateData) {
 	std::lock_guard<std::mutex> mbd_lock(m_mbd_mutex);
 
 	bool pending;

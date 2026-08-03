@@ -114,7 +114,7 @@ namespace ldmmap {
 		std::string certDigest;
 
 		//map checks
-		int64_t wayId;
+		int64_t wayId=-1;
 	} vehicleData_t;
 }
 

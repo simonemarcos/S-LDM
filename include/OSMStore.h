@@ -29,8 +29,8 @@ public:
     // returns the highway id that matches the distance constraint, if no highway is found returns -1, distance is then overwritten with the distance from the closest road
     osmium::object_id_type checkIfPointOnRoad(double lat, double lon, double &distance, osmium::object_id_type lastWay=-1);
 
-    // return true is heading is consistent with the road, false otherwise, roadHeading is used to return the heading of the road
-    bool checkHeadingMatchesRoad(double heading, double lat, double lon, osmium::object_id_type highwayID, double &roadHeading);
+    // return true if heading doesn't match with the road, false otherwise, roadHeading is used to return the heading of the road
+    bool checkHeadingNotFollowingRoad(double heading, double lat, double lon, osmium::object_id_type highwayID, double &roadHeading);
 
     // returns true if position is inside a building, false otherwise
     bool checkIfPointInBuilding(double lat, double lon);

@@ -45,13 +45,14 @@ public:
         if (way.tags().get_value_by_key("building","")!="") { // check if building
             way_polygon newPolygon;
             for (osmium::NodeRef nr:way.nodes()) {
-                boost::geometry::append(newPolygon.outer(),point2d(nr.location().lat(),nr.location().lon()));
+                boost::geometry::append(newPolygon.outer(),point2d(nr.location().lon(),nr.location().lat()));
             }
+            boost::geometry::correct(newPolygon);
             buildings_polygons.try_emplace(way.id(),newPolygon);
         } else if (way.tags().get_value_by_key("highway","")!="") { // check if highway (could be avoided since we only query buildings and highways)
             way_linestring newLinestring;
             for (osmium::NodeRef nr:way.nodes()) {
-                newLinestring.emplace_back(point2d(nr.location().lat(),nr.location().lon()));
+                newLinestring.emplace_back(point2d(nr.location().lon(),nr.location().lat()));
             }
             highways_linestrings.try_emplace(way.id(),newLinestring);
     
@@ -132,10 +133,10 @@ public:
     static void node(const osmium::Node& node) {
         // check if its bus_stop or tram_stop
         if (node.tags().get_value_by_key("highway","")=="bus_stop") {
-            bus_stops.try_emplace(node.id(),point2d(node.location().lat(),node.location().lon()));
+            bus_stops.try_emplace(node.id(),point2d(node.location().lon(),node.location().lat()));
         }
         if (node.tags().get_value_by_key("railway","")=="tram_stop") {
-            tram_stops.try_emplace(node.id(),point2d(node.location().lat(),node.location().lon()));
+            tram_stops.try_emplace(node.id(),point2d(node.location().lon(),node.location().lat()));
         }
     }
 
@@ -186,10 +187,6 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon, i
         //        }
         //    }
         //}
-        cache=fopen("last_bounding_box.txt","w");
-        last_modified=get_timestamp_s();
-        fprintf(cache,"%lf\n%lf %lf %lf %lf",last_modified,minlat,minlon,maxlat,maxlon);
-        fclose(cache);
         
         // LIBCURL FETCH DATA ONLY IF NOT CACHED
         std::string minlat_s=std::to_string(minlat);
@@ -243,6 +240,13 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon, i
         }
         curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
+
+        if (res==CURLE_OK) {
+            cache=fopen("last_bounding_box.txt","w");
+            last_modified=get_timestamp_s();
+            fprintf(cache,"%lf\n%lf %lf %lf %lf",last_modified,minlat,minlon,maxlat,maxlon);
+            fclose(cache);
+        }
     }
 
     // LIBOSMIUM READ FILE
@@ -253,6 +257,9 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon, i
         CustomHandler handler;
         highways_linestrings.clear();
         buildings_polygons.clear();
+        highways_info.clear();
+        bus_stops.clear();
+        tram_stops.clear();
 
         osmium::index::map::FlexMem<osmium::unsigned_object_id_type, osmium::Location> index;
         osmium::handler::NodeLocationsForWays<osmium::index::map::FlexMem<osmium::unsigned_object_id_type, osmium::Location>> loc_handler{index};
@@ -297,10 +304,11 @@ OSMStore::OSMStore(double minlat, double minlon, double maxlat, double maxlon, i
             std::map<osmium::object_id_type,way_linestring> new_highways_linestrings;
             std::map<osmium::object_id_type,way_polygon> new_buildings_polygons;
             way_polygon sectorPolygon;
-            boost::geometry::append(sectorPolygon.outer(),point2d(lat,lon));
-            boost::geometry::append(sectorPolygon.outer(),point2d(lat+m_lat_increment,lon));
-            boost::geometry::append(sectorPolygon.outer(),point2d(lat+m_lat_increment,lon+m_lon_increment));
-            boost::geometry::append(sectorPolygon.outer(),point2d(lat,lon+m_lon_increment));
+            boost::geometry::append(sectorPolygon.outer(),point2d(lon,lat));
+            boost::geometry::append(sectorPolygon.outer(),point2d(lon,lat+m_lat_increment));
+            boost::geometry::append(sectorPolygon.outer(),point2d(lon+m_lon_increment,lat+m_lat_increment));
+            boost::geometry::append(sectorPolygon.outer(),point2d(lon+m_lon_increment,lat));
+            boost::geometry::correct(sectorPolygon);
             for (auto w:highways_linestrings) {
                 if (boost::geometry::intersects(w.second,sectorPolygon)) {
                     new_highways_linestrings.emplace(w);
@@ -345,16 +353,16 @@ void OSMStore::printAll() {
 }
 
 osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon, double &distance, osmium::object_id_type lastWay) {
-    osmium::object_id_type closestWay;
+    osmium::object_id_type closestWay=-1;
     double closestDist=2e10;
 
     double tA=get_timestamp_us();
 
-    point2d p(lat,lon);
+    point2d p(lon,lat);
     int i=std::floor((lat-m_minlat)/m_lat_increment);
     int j=std::floor((lon-m_minlon)/m_lon_increment);
-    if (i>latSectors) {i=latSectors;}
-    if (j>lonSectors) {j=lonSectors;}
+    if (i<0) {i=0;} else if (i>latSectors) {i=latSectors;}
+    if (j<0) {j=0;} else if (j>lonSectors) {j=lonSectors;}
     std::tuple<int,int> index(i,j);
 
     for (auto way:m_highways_by_sector.at(index)) {
@@ -367,10 +375,10 @@ osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon, doub
 
             // commented out to find the best match (could have more roads in range)
             // potentially see if there are multiple 0  distance choices and pick the right one based on heading
-            // if (dist<highways_info.at(way.first).width+distance) break;
+            // if (dist<m_highways_info.at(way.first).width+distance) break;
 
             // different approach,if it's not the first message check if the road selected before is in distance
-            if (way.first==lastWay && closestDist<highways_info.at(closestWay).width+distance) {
+            if (way.first==lastWay && closestDist<m_highways_info.at(closestWay).width+distance) {
                 break;
             }
         }
@@ -382,7 +390,7 @@ osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon, doub
     //std::cout <<"\nTime for onRoad calculations in us: " <<tB-tA;
     //std::cout <<"\nCurrent average time for onRoad calculations in us: " <<sumPositionOnRoad/countPositionOnRoad;
 
-    if (closestDist>highways_info.at(closestWay).width+distance) {
+    if (closestWay==-1 || closestDist>m_highways_info.at(closestWay).width+distance) {
         closestWay=-1;
     }
     distance=closestDist;
@@ -390,63 +398,60 @@ osmium::object_id_type OSMStore::checkIfPointOnRoad(double lat, double lon, doub
     return closestWay;
 }
 
-bool OSMStore::checkHeadingMatchesRoad(double heading, double lat, double lon, osmium::object_id_type highwayID, double &roadHeading) {
-    bool retval=false;
-    double tolerance=0.2;
+bool OSMStore::checkHeadingNotFollowingRoad(double heading, double lat, double lon, osmium::object_id_type highwayID, double &roadHeading) {
+    bool retval=true;
+    double tolerance=30;
 
-    int closestIndex;
-    double closestDist=2e10;    
+    int closestIndex=-1;
+    double closestDist=2e10;
 
     double tA=get_timestamp_ns();
 
     int i=std::floor((lat-m_minlat)/m_lat_increment);
     int j=std::floor((lon-m_minlon)/m_lon_increment);
-    if (i>latSectors) {i=latSectors;}
-    if (j>lonSectors) {j=lonSectors;}
+    if (i<0) {i=0;} else if (i>latSectors) {i=latSectors;}
+    if (j<0) {j=0;} else if (j>lonSectors) {j=lonSectors;}
     std::tuple<int,int> index(i,j);
     way_linestring way=m_highways_by_sector.at(index).at(highwayID);
     bool oneway=m_highways_info.at(highwayID).oneway;
 
-    point2d p(lat,lon);
+    point2d p(lon,lat);
     for (int i=0;i<way.size();i++) {
         double dist=boost::geometry::distance(p,way.at(i));
         if (dist<closestDist) {
+            closestDist=dist;
             closestIndex=i;
         }
     }
 
     const double radiansFactor=M_PI/180;
-    double dLat;
-    double dLon;
     if (closestIndex>0) {
-        double dLat = (way.at(closestIndex).x() - way.at(closestIndex-1).x()) * radiansFactor;
-        double dLon = (way.at(closestIndex).y() - way.at(closestIndex-1).y()) * radiansFactor;
+        double dLat = (way.at(closestIndex).y() - way.at(closestIndex-1).y()) * radiansFactor;
+        double dLon = (way.at(closestIndex).x() - way.at(closestIndex-1).x()) * radiansFactor;
         const double prevToClosestNodeHeading=fmod((atan2(dLon,dLat)/radiansFactor)+360,360); // "heading" from node before closest and closest
         //std::cout <<"\nPrevious to closest heading:" <<prevToClosestNodeHeading;
-        if (heading<prevToClosestNodeHeading*(1+tolerance) && heading>prevToClosestNodeHeading*(1+tolerance)) {
-            retval=true;
+        if (fmod(heading-prevToClosestNodeHeading+540,360)<tolerance) { 
+            retval=false;
         } else { //to check opposite driving direction needs to be skipped if the road is one-way only
             if (!oneway) {
-                heading=fmod(heading+180,360);
-                if (heading<prevToClosestNodeHeading*(1+tolerance) && heading>prevToClosestNodeHeading*(1+tolerance)) {
-                    retval=true;
+                if (fmod(fmod(heading+180,360)-prevToClosestNodeHeading+540,360)<tolerance) {
+                    retval=false;
                 }
             }
         }
     }
 
     if (closestIndex<way.size()-1) {
-        const double dLat = (way.at(closestIndex+1).x() - way.at(closestIndex).x()) * radiansFactor;
-        const double dLon = (way.at(closestIndex+1).y() - way.at(closestIndex).y()) * radiansFactor;
+        const double dLat = (way.at(closestIndex+1).y() - way.at(closestIndex).y()) * radiansFactor;
+        const double dLon = (way.at(closestIndex+1).x() - way.at(closestIndex).x()) * radiansFactor;
         const double closestToNextNodeHeading=fmod((atan2(dLon,dLat)/radiansFactor)+360,360); // "heading" from closest node to the one after
         //std::cout <<"\nClosest to next heading: " <<closestToNextNodeHeading;
-        if (heading<closestToNextNodeHeading*(1+tolerance) && heading>closestToNextNodeHeading*(1+tolerance)) {
-            retval=true;
+        if (fmod(heading-closestToNextNodeHeading+540,360)<tolerance) {
+            retval=false;
         } else { //to check opposite driving direction needs to be skipped if the road is one-way only
             if (!oneway) {
-                heading=fmod(heading+180,360);
-                if (heading<closestToNextNodeHeading*(1+tolerance) && heading>closestToNextNodeHeading*(1+tolerance)) {
-                    retval=true;
+                if (fmod(fmod(heading+180,360)-closestToNextNodeHeading+540,360)<tolerance) {
+                    retval=false;
                 }
             }
         }
@@ -467,11 +472,11 @@ bool OSMStore::checkIfPointInBuilding(double lat, double lon) {
 
     double tA=get_timestamp_ns();
 
-    point2d p(lat,lon);
+    point2d p(lon,lat);
     int i=std::floor((lat-m_minlat)/m_lat_increment);
     int j=std::floor((lon-m_minlon)/m_lon_increment);
-    if (i>latSectors) {i=latSectors;}
-    if (j>lonSectors) {j=lonSectors;}
+    if (i<0) {i=0;} else if (i>latSectors) {i=latSectors;}
+    if (j<0) {j=0;} else if (j>lonSectors) {j=lonSectors;}
     std::tuple<int,int> index(i,j);
 
     for (auto building:m_buildings_by_sector.at(index)) {
@@ -493,7 +498,7 @@ bool OSMStore::checkIfPointInBuilding(double lat, double lon) {
 
 bool OSMStore::checkSpeedOverTypeLimit(double speed, osmium::object_id_type highwayID, double &speedLimit) {
     bool retval=false;
-    speedLimit=highways_info.at(highwayID).maxSpeed;
+    speedLimit=m_highways_info.at(highwayID).maxSpeed;
     if (speed>speedLimit) {
         retval=true;
     }
@@ -502,7 +507,7 @@ bool OSMStore::checkSpeedOverTypeLimit(double speed, osmium::object_id_type high
 
 bool OSMStore::checkIfPointIsStop(double lat, double lon, bool isBusStop) {
     bool retval=false;
-    point2d p(lat,lon);
+    point2d p(lon,lat);
     if (isBusStop) {
         for (auto bs:m_bus_stops) {
             if (boost::geometry::distance(p,bs.second)<3) {

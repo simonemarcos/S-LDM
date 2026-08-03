@@ -199,11 +199,11 @@ class MisbehaviourDetector {
 
 		} mbdUnavailableField_e;
 
-		uint64_t processCAM(proton::binary message_bin, ldmmap::vehicleData_t vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
+		uint64_t processCAM(proton::binary message_bin, ldmmap::vehicleData_t &vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
 		// to be used for new DENMs but also to process the reporting of old DENMs that were pending future CAM verifications
-		void processDENM(proton::binary message_bin, ldmmap::eventData_t evedata, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
-		uint64_t processVAM(proton::binary message_bin, ldmmap::vehicleData_t vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
-		uint64_t processCPM(proton::binary message_bin, std::vector<ldmmap::vehicleData_t> PO_vec, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
+		void processDENM(proton::binary message_bin, ldmmap::eventData_t &evedata, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
+		uint64_t processVAM(proton::binary message_bin, ldmmap::vehicleData_t &vehdata, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
+		uint64_t processCPM(proton::binary message_bin, std::vector<ldmmap::vehicleData_t> &PO_vec, Security::Security_error_t sec_retval, storedCertificate_t certificateData);
 		void cleanupPendingEvents();
 		
 		// "protected" just in case new classes will be derived from this one
@@ -245,11 +245,11 @@ class MisbehaviourDetector {
 		int msgNumber;
 		
 		// to reuse the checks on CPMs set msgType=CPM for increased tolerance, default is msgType=CAM
-		uint64_t individualCAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables, int msgType=CAM);
+		uint64_t individualCAMchecks(ldmmap::vehicleData_t &vehdata, uint64_t &unavailables, int msgType=CAM);
 		// to reuse the checks on CPMs set msgType=CPM for increased tolerance, default is msgType=VAM
-		uint64_t individualVAMchecks(ldmmap::vehicleData_t vehdata, uint64_t &unavailables, int msgType=VAM);
-		uint64_t individualCPMchecks(std::vector<ldmmap::vehicleData_t> PO_vec, uint64_t &unavailables);
-		uint64_t individualDENMchecks(ldmmap::eventData_t evedata, uint64_t &unavailables, bool &pending);
+		uint64_t individualVAMchecks(ldmmap::vehicleData_t &vehdata, uint64_t &unavailables, int msgType=VAM);
+		uint64_t individualCPMchecks(std::vector<ldmmap::vehicleData_t> &PO_vec, uint64_t &unavailables);
+		uint64_t individualDENMchecks(ldmmap::eventData_t &evedata, uint64_t &unavailables, bool &pending);
 		void eventDecision(pendingEvent_t currentEvent);
 		void Init(double minlat, double minlon, double maxlat, double maxlon);
 	};
